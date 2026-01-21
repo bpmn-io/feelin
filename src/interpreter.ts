@@ -287,18 +287,13 @@ function evalNode(node: SyntaxNodeRef, input: string, args: any[]) {
   case 'ArithOp': {
     const fn = (context) => {
 
-      const nullable = (op, types = [ 'number' ]) => (a, b) => {
+      const nullable = (op, opName, types = [ 'number' ]) => (a, b) => {
 
         const left = a(context);
         const right = b(context);
 
-        if (isArray(left)) {
-          addWarning('INVALID_TYPE', 'Invalid type for arithmetic operation: cannot use array', fn);
-          return null;
-        }
-
-        if (isArray(right)) {
-          addWarning('INVALID_TYPE', 'Invalid type for arithmetic operation: cannot use array', fn);
+        if (isArray(left) || isArray(right)) {
+          addWarning('INVALID_TYPE', `Can't ${opName} '${right}' to '${left}'`, fn);
           return null;
         }
 
@@ -309,11 +304,11 @@ function evalNode(node: SyntaxNodeRef, input: string, args: any[]) {
 
         if (temporal.includes(leftType)) {
           if (!temporal.includes(rightType)) {
-            addWarning('INVALID_TYPE', `Invalid type combination for arithmetic operation: ${leftType} and ${rightType}`, fn);
+            addWarning('INVALID_TYPE', `Can't ${opName} '${right}' to '${left}'`, fn);
             return null;
           }
         } else if (leftType !== rightType || !types.includes(leftType)) {
-          addWarning('INVALID_TYPE', `Invalid type combination for arithmetic operation: ${leftType} and ${rightType}`, fn);
+          addWarning('INVALID_TYPE', `Can't ${opName} '${right}' to '${left}'`, fn);
           return null;
         }
 
@@ -345,7 +340,7 @@ function evalNode(node: SyntaxNodeRef, input: string, args: any[]) {
         }
 
         return a + b;
-      }, [ 'string', 'number', 'date', 'time', 'duration', 'date time' ]);
+      }, 'add', [ 'string', 'number', 'date', 'time', 'duration', 'date time' ]);
       case '-': return nullable((a, b) => {
         if (isType(a, 'time') && isDuration(b)) {
           return a.minus(b).set({
@@ -362,11 +357,11 @@ function evalNode(node: SyntaxNodeRef, input: string, args: any[]) {
         }
 
         return a - b;
-      }, [ 'number', 'date', 'time', 'duration', 'date time' ]);
-      case '*': return nullable((a, b) => a * b);
-      case '/': return nullable((a, b) => !b ? null : a / b);
+      }, 'subtract', [ 'number', 'date', 'time', 'duration', 'date time' ]);
+      case '*': return nullable((a, b) => a * b, 'multiply', [ 'number' ]);
+      case '/': return nullable((a, b) => !b ? null : a / b, 'divide', [ 'number' ]);
       case '**':
-      case '^': return nullable((a, b) => a ** b);
+      case '^': return nullable((a, b) => a ** b, 'exponentiate', [ 'number' ]);
       }
     };
     return fn;
@@ -696,10 +691,11 @@ function evalNode(node: SyntaxNodeRef, input: string, args: any[]) {
 
       // FunctionInvocation
       else {
-        const wrappedFn = wrapFunction(args[0](context));
+        const target = args[0](context);
+        const wrappedFn = wrapFunction(target);
 
         if (!wrappedFn) {
-          addWarning('NOT_A_FUNCTION', 'Target is not a function', fn);
+          addWarning('NO_FUNCTION_FOUND', `No function found with name '${input}'`, fn);
           return null;
         }
 
@@ -718,7 +714,7 @@ function evalNode(node: SyntaxNodeRef, input: string, args: any[]) {
       const wrappedFn = wrapFunction(getBuiltin('@', context));
 
       if (!wrappedFn) {
-        addWarning('NOT_A_FUNCTION', 'Target is not a function', fn);
+        addWarning('NO_FUNCTION_FOUND', 'No function found with name \'@\'', fn);
         return null;
       }
 
@@ -730,10 +726,14 @@ function evalNode(node: SyntaxNodeRef, input: string, args: any[]) {
   case 'FunctionInvocation': {
     const fn = (context) => {
 
-      const wrappedFn = wrapFunction(args[0](context));
+      const target = args[0](context);
+      const wrappedFn = wrapFunction(target);
 
       if (!wrappedFn) {
-        addWarning('NOT_A_FUNCTION', 'Target is not a function', fn);
+
+        // Try to get a meaningful name for the error message
+        const name = typeof target === 'string' ? target : 'function';
+        addWarning('NO_FUNCTION_FOUND', `No function found with name '${name}'`, fn);
         return null;
       }
 
@@ -908,7 +908,8 @@ function evalNode(node: SyntaxNodeRef, input: string, args: any[]) {
         const value = filterTarget[idx < 0 ? filterTarget.length + idx : idx - 1];
 
         if (typeof value === 'undefined') {
-          addWarning('OUT_OF_BOUNDS', `Index ${idx} is out of bounds for array of length ${filterTarget.length}`, fn);
+
+          // Silently return null for out of bounds, like Camunda does
           return null;
         } else {
           return value;

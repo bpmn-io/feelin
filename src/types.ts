@@ -327,12 +327,15 @@ export class FunctionWrapper {
 }
 
 // Warning types
+// Warning types aligned with Camunda FEEL Scala EvaluationFailureType
 export type WarningType =
   | 'NO_VARIABLE_FOUND'
+  | 'NO_CONTEXT_ENTRY_FOUND'
+  | 'NO_PROPERTY_FOUND'
+  | 'NOT_COMPARABLE'
   | 'INVALID_TYPE'
-  | 'NOT_A_FUNCTION'
-  | 'OUT_OF_BOUNDS'
-  | 'NULL_PROPAGATION';
+  | 'NO_FUNCTION_FOUND'
+  | 'FUNCTION_INVOCATION_FAILURE';
 
 export type Warning = {
   type: WarningType;

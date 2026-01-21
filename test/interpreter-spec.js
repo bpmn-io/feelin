@@ -1339,7 +1339,7 @@ describe('interpreter', function() {
       expect(result.value).to.be.null;
       expect(result.warnings).to.have.lengthOf(1);
       expect(result.warnings[0].type).to.equal('INVALID_TYPE');
-      expect(result.warnings[0].message).to.contain('Invalid type');
+      expect(result.warnings[0].message).to.contain('add');
     });
 
     it('should collect INVALID_TYPE warning for array arithmetic', function() {
@@ -1348,24 +1348,24 @@ describe('interpreter', function() {
       expect(result.value).to.be.null;
       expect(result.warnings).to.have.lengthOf(1);
       expect(result.warnings[0].type).to.equal('INVALID_TYPE');
-      expect(result.warnings[0].message).to.contain('array');
+      expect(result.warnings[0].message).to.contain('multiply');
     });
 
-    it('should collect NOT_A_FUNCTION warning', function() {
+    it('should collect NO_FUNCTION_FOUND warning', function() {
       const result = evaluate('x()', { x: 5 });
 
       expect(result.value).to.be.null;
       expect(result.warnings).to.have.lengthOf(1);
-      expect(result.warnings[0].type).to.equal('NOT_A_FUNCTION');
+      expect(result.warnings[0].type).to.equal('NO_FUNCTION_FOUND');
     });
 
-    it('should collect OUT_OF_BOUNDS warning', function() {
+    it('should return null for out of bounds access', function() {
       const result = evaluate('[1, 2, 3][10]', {});
 
       expect(result.value).to.be.null;
-      expect(result.warnings).to.have.lengthOf(1);
-      expect(result.warnings[0].type).to.equal('OUT_OF_BOUNDS');
-      expect(result.warnings[0].message).to.contain('10');
+
+      // No warning for out of bounds - matches Camunda behavior
+      expect(result.warnings).to.be.empty;
     });
 
     it('should include position information in warnings', function() {

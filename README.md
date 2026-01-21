@@ -69,7 +69,7 @@ Both `evaluate()` and `unaryTest()` now return structured results:
 }
 
 interface Warning {
-  type: 'NO_VARIABLE_FOUND' | 'INVALID_TYPE' | 'NOT_A_FUNCTION' | 'OUT_OF_BOUNDS' | 'NULL_PROPAGATION';
+  type: 'NO_VARIABLE_FOUND' | 'NO_CONTEXT_ENTRY_FOUND' | 'NO_PROPERTY_FOUND' | 'NOT_COMPARABLE' | 'INVALID_TYPE' | 'NO_FUNCTION_FOUND' | 'FUNCTION_INVOCATION_FAILURE';
   message: string;
   position: {
     from: number;
@@ -80,11 +80,15 @@ interface Warning {
 
 ### Warning Types
 
+Warning types are aligned with [Camunda FEEL Scala](https://github.com/camunda/feel-scala) `EvaluationFailureType`:
+
 - **NO_VARIABLE_FOUND**: A variable referenced in the expression was not found in the context
+- **NO_CONTEXT_ENTRY_FOUND**: A context entry was not found
+- **NO_PROPERTY_FOUND**: A property was not found on an object
+- **NOT_COMPARABLE**: Values cannot be compared (incompatible types)
 - **INVALID_TYPE**: An operation received incompatible types (e.g., arithmetic on arrays, mismatched types)
-- **NOT_A_FUNCTION**: Attempted to invoke a non-function value
-- **OUT_OF_BOUNDS**: Array/list index access was out of bounds
-- **NULL_PROPAGATION**: (Reserved for future use) Null propagation through operations
+- **NO_FUNCTION_FOUND**: Function not found or target is not a function
+- **FUNCTION_INVOCATION_FAILURE**: Function invocation failed during execution
 
 
 ## Features
