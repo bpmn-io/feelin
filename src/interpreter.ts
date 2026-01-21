@@ -62,6 +62,7 @@ export type InterpreterContext = Record<string, any>;
 
 // Thread-local evaluation state
 let currentCollector: WarningCollector | null = null;
+// eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
 let currentNodePositions: Map<Function, { from: number; to: number }> | null = null;
 
 
@@ -77,6 +78,7 @@ class Interpreter {
     const stack: StackEntry[] = [ root ];
 
     // Map to store positions for each function
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
     const nodePositions = new Map<Function, { from: number; to: number }>();
 
     tree.iterate({
@@ -204,6 +206,7 @@ export function unaryTest(expression: string, context: InterpreterContext = {}, 
   currentNodePositions = nodePositions;
 
   try {
+
     // root = fn(ctx) => test(val)
     const test = root(context);
 
@@ -214,6 +217,7 @@ export function unaryTest(expression: string, context: InterpreterContext = {}, 
       warnings: collector.getWarnings()
     };
   } finally {
+
     // Clear thread-local state
     currentCollector = null;
     currentNodePositions = null;
@@ -235,6 +239,7 @@ export function evaluate(expression: string, context: InterpreterContext = {}, d
   currentNodePositions = nodePositions;
 
   try {
+
     // root = Expression :: fn(ctx)
 
     const result = root(context);
@@ -244,6 +249,7 @@ export function evaluate(expression: string, context: InterpreterContext = {}, d
       warnings: collector.getWarnings()
     };
   } finally {
+
     // Clear thread-local state
     currentCollector = null;
     currentNodePositions = null;
@@ -252,6 +258,7 @@ export function evaluate(expression: string, context: InterpreterContext = {}, d
 
 
 // Helper to add warnings with position tracking
+// eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
 function addWarning(type: string, message: string, fn?: Function): void {
   if (!currentCollector) {
     return;
@@ -266,6 +273,7 @@ function addWarning(type: string, message: string, fn?: Function): void {
     to = pos.to;
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   currentCollector.addWarning(type as any, message, from, to);
 }
 
@@ -282,12 +290,12 @@ function evalNode(node: SyntaxNodeRef, input: string, args: any[]) {
         const right = b(context);
 
         if (isArray(left)) {
-          addWarning('INVALID_TYPE', `Invalid type for arithmetic operation: cannot use array`, fn);
+          addWarning('INVALID_TYPE', 'Invalid type for arithmetic operation: cannot use array', fn);
           return null;
         }
 
         if (isArray(right)) {
-          addWarning('INVALID_TYPE', `Invalid type for arithmetic operation: cannot use array`, fn);
+          addWarning('INVALID_TYPE', 'Invalid type for arithmetic operation: cannot use array', fn);
           return null;
         }
 
@@ -499,14 +507,14 @@ function evalNode(node: SyntaxNodeRef, input: string, args: any[]) {
       }
 
       const builtin = getBuiltin(name, context);
-      
+
       if (builtin) {
         return builtin;
       }
 
       // Variable not found - emit warning
       addWarning('NO_VARIABLE_FOUND', `Variable '${name}' not found`, fn);
-      
+
       return null;
     };
     return fn;

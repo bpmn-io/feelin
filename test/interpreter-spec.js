@@ -1318,6 +1318,81 @@ describe('interpreter', function() {
 
   });
 
+
+  describe('warnings', function() {
+
+    it('should collect NO_VARIABLE_FOUND warning', function() {
+      const result = evaluate('x + y', {});
+
+      expect(result.value).to.be.null;
+      expect(result.warnings.length).to.be.at.least(2);
+
+      const varWarnings = result.warnings.filter(w => w.type === 'NO_VARIABLE_FOUND');
+      expect(varWarnings).to.have.lengthOf(2);
+      expect(varWarnings[0].message).to.contain('x');
+      expect(varWarnings[1].message).to.contain('y');
+    });
+
+    it('should collect INVALID_TYPE warning for arithmetic', function() {
+      const result = evaluate('"foo" + 10', {});
+
+      expect(result.value).to.be.null;
+      expect(result.warnings).to.have.lengthOf(1);
+      expect(result.warnings[0].type).to.equal('INVALID_TYPE');
+      expect(result.warnings[0].message).to.contain('Invalid type');
+    });
+
+    it('should collect INVALID_TYPE warning for array arithmetic', function() {
+      const result = evaluate('[1, 2] * 3', {});
+
+      expect(result.value).to.be.null;
+      expect(result.warnings).to.have.lengthOf(1);
+      expect(result.warnings[0].type).to.equal('INVALID_TYPE');
+      expect(result.warnings[0].message).to.contain('array');
+    });
+
+    it('should collect NOT_A_FUNCTION warning', function() {
+      const result = evaluate('x()', { x: 5 });
+
+      expect(result.value).to.be.null;
+      expect(result.warnings).to.have.lengthOf(1);
+      expect(result.warnings[0].type).to.equal('NOT_A_FUNCTION');
+    });
+
+    it('should collect OUT_OF_BOUNDS warning', function() {
+      const result = evaluate('[1, 2, 3][10]', {});
+
+      expect(result.value).to.be.null;
+      expect(result.warnings).to.have.lengthOf(1);
+      expect(result.warnings[0].type).to.equal('OUT_OF_BOUNDS');
+      expect(result.warnings[0].message).to.contain('10');
+    });
+
+    it('should include position information in warnings', function() {
+      const result = evaluate('unknownVar + 5', {});
+
+      expect(result.warnings[0].position).to.exist;
+      expect(result.warnings[0].position.from).to.be.a('number');
+      expect(result.warnings[0].position.to).to.be.a('number');
+    });
+
+    it('should return empty warnings for valid expressions', function() {
+      const result = evaluate('1 + 2', {});
+
+      expect(result.value).to.equal(3);
+      expect(result.warnings).to.be.empty;
+    });
+
+    it('should collect warnings in unaryTest', function() {
+      const result = unaryTest('x', { '?': 5 });
+
+      expect(result.value).to.be.null;
+      expect(result.warnings).to.have.lengthOf(1);
+      expect(result.warnings[0].type).to.equal('NO_VARIABLE_FOUND');
+    });
+
+  });
+
 });
 
 
@@ -1340,7 +1415,7 @@ function createExprVerifier(options) {
   const name = `${expression}${context ? ` ${ inspect(context) }` : ''}`;
 
   it(name, function() {
-    const output = evaluate(expression, context || {}, dialect);
+    const output = evaluate(expression, context || {}, dialect).value;
 
     expect(output).to.eql(expectedOutput);
   });
@@ -1369,7 +1444,7 @@ function createUnaryVerifier(options) {
 
   it(name, function() {
 
-    const output = unaryTest(test, context, dialect);
+    const output = unaryTest(test, context, dialect).value;
 
     expect(output).to.eql(expectedOutput);
   });

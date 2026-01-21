@@ -780,7 +780,7 @@ function createExprVerifier(options) {
   const name = `${expression}${context ? ` ${ inspect(context) }` : ''}`;
 
   it(name, function() {
-    const output = evaluate(expression, context || {});
+    const output = evaluate(expression, context || {}).value;
 
     expect(output).to.eql(expectedOutput);
   });
