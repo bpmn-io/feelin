@@ -11,7 +11,9 @@ import {
   isDuration,
   isDateTime,
   isType,
-  isNumber
+  isNumber,
+  WarningCollector,
+  EvaluationResult
 } from './types.js';
 
 import {
@@ -58,17 +60,24 @@ export class SyntaxError extends Error {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type InterpreterContext = Record<string, any>;
 
+// Thread-local evaluation state
+let currentCollector: WarningCollector | null = null;
+let currentNodePositions: Map<Function, { from: number; to: number }> | null = null;
+
 
 class Interpreter {
 
   _buildExecutionTree(tree: Tree, input: string) {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    type StackEntry = { args: any[], nodeInput: string };
+    type StackEntry = { args: any[], nodeInput: string, from: number, to: number };
 
-    const root = { args: [], nodeInput: input };
+    const root = { args: [], nodeInput: input, from: 0, to: input.length };
 
     const stack: StackEntry[] = [ root ];
+
+    // Map to store positions for each function
+    const nodePositions = new Map<Function, { from: number; to: number }>();
 
     tree.iterate({
       enter(nodeRef) {
@@ -111,7 +120,9 @@ class Interpreter {
 
         stack.push({
           nodeInput,
-          args: []
+          args: [],
+          from,
+          to
         });
       },
 
@@ -123,29 +134,40 @@ class Interpreter {
 
         const {
           nodeInput,
-          args
+          args,
+          from,
+          to
         } = stack.pop();
 
         const parent = stack[stack.length - 1];
 
         const expr = evalNode(nodeRef, nodeInput, args);
 
+        // Store position for this expression function
+        if (typeof expr === 'function') {
+          nodePositions.set(expr, { from, to });
+        }
+
         parent.args.push(expr);
       }
     });
 
-    return root.args[root.args.length - 1];
+    return {
+      root: root.args[root.args.length - 1],
+      nodePositions
+    };
   }
 
   evaluate(expression: string, context: InterpreterContext = {}, dialect?: string) {
 
     const parseTree = parseExpression(expression, context, dialect);
 
-    const root = this._buildExecutionTree(parseTree, expression);
+    const { root, nodePositions } = this._buildExecutionTree(parseTree, expression);
 
     return {
       parseTree,
-      root
+      root,
+      nodePositions
     };
   }
 
@@ -153,11 +175,12 @@ class Interpreter {
 
     const parseTree = parseUnaryTests(expression, context, dialect);
 
-    const root = this._buildExecutionTree(parseTree, expression);
+    const { root, nodePositions } = this._buildExecutionTree(parseTree, expression);
 
     return {
       parseTree,
-      root
+      root,
+      nodePositions
     };
   }
 
@@ -165,117 +188,178 @@ class Interpreter {
 
 const interpreter = new Interpreter();
 
-export function unaryTest(expression: string, context: InterpreterContext = {}, dialect?: string) : boolean {
+export function unaryTest(expression: string, context: InterpreterContext = {}, dialect?: string) : EvaluationResult<boolean | null> {
 
   const value = context['?'] !== undefined ? context['?'] : null;
 
   const {
-    root
+    root,
+    nodePositions
   } = interpreter.unaryTest(expression, context, dialect);
 
-  // root = fn(ctx) => test(val)
-  const test = root(context);
+  const collector = new WarningCollector();
 
-  return test(value);
+  // Set thread-local state
+  currentCollector = collector;
+  currentNodePositions = nodePositions;
+
+  try {
+    // root = fn(ctx) => test(val)
+    const test = root(context);
+
+    const testResult = test(value);
+
+    return {
+      value: testResult,
+      warnings: collector.getWarnings()
+    };
+  } finally {
+    // Clear thread-local state
+    currentCollector = null;
+    currentNodePositions = null;
+  }
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function evaluate(expression: string, context: InterpreterContext = {}, dialect?: string): any {
+export function evaluate(expression: string, context: InterpreterContext = {}, dialect?: string): EvaluationResult<any> {
 
   const {
-    root
+    root,
+    nodePositions
   } = interpreter.evaluate(expression, context, dialect);
 
-  // root = Expression :: fn(ctx)
+  const collector = new WarningCollector();
 
-  return root(context);
+  // Set thread-local state
+  currentCollector = collector;
+  currentNodePositions = nodePositions;
+
+  try {
+    // root = Expression :: fn(ctx)
+
+    const result = root(context);
+
+    return {
+      value: result,
+      warnings: collector.getWarnings()
+    };
+  } finally {
+    // Clear thread-local state
+    currentCollector = null;
+    currentNodePositions = null;
+  }
 }
 
+
+// Helper to add warnings with position tracking
+function addWarning(type: string, message: string, fn?: Function): void {
+  if (!currentCollector) {
+    return;
+  }
+
+  let from = 0;
+  let to = 0;
+
+  if (fn && currentNodePositions && currentNodePositions.has(fn)) {
+    const pos = currentNodePositions.get(fn);
+    from = pos.from;
+    to = pos.to;
+  }
+
+  currentCollector.addWarning(type as any, message, from, to);
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function evalNode(node: SyntaxNodeRef, input: string, args: any[]) {
 
   switch (node.name) {
-  case 'ArithOp': return (context) => {
+  case 'ArithOp': {
+    const fn = (context) => {
 
-    const nullable = (op, types = [ 'number' ]) => (a, b) => {
+      const nullable = (op, types = [ 'number' ]) => (a, b) => {
 
-      const left = a(context);
-      const right = b(context);
+        const left = a(context);
+        const right = b(context);
 
-      if (isArray(left)) {
-        return null;
-      }
-
-      if (isArray(right)) {
-        return null;
-      }
-
-      const leftType = getType(left);
-      const rightType = getType(right);
-
-      const temporal = [ 'date', 'time', 'date time', 'duration' ];
-
-      if (temporal.includes(leftType)) {
-        if (!temporal.includes(rightType)) {
+        if (isArray(left)) {
+          addWarning('INVALID_TYPE', `Invalid type for arithmetic operation: cannot use array`, fn);
           return null;
         }
-      } else if (leftType !== rightType || !types.includes(leftType)) {
-        return null;
-      }
 
-      return op(left, right);
+        if (isArray(right)) {
+          addWarning('INVALID_TYPE', `Invalid type for arithmetic operation: cannot use array`, fn);
+          return null;
+        }
+
+        const leftType = getType(left);
+        const rightType = getType(right);
+
+        const temporal = [ 'date', 'time', 'date time', 'duration' ];
+
+        if (temporal.includes(leftType)) {
+          if (!temporal.includes(rightType)) {
+            addWarning('INVALID_TYPE', `Invalid type combination for arithmetic operation: ${leftType} and ${rightType}`, fn);
+            return null;
+          }
+        } else if (leftType !== rightType || !types.includes(leftType)) {
+          addWarning('INVALID_TYPE', `Invalid type combination for arithmetic operation: ${leftType} and ${rightType}`, fn);
+          return null;
+        }
+
+        return op(left, right);
+      };
+
+      switch (input) {
+      case '+': return nullable((a, b) => {
+
+        // flip these as luxon operations with durations aren't commutative
+        if (isDuration(a) && !isDuration(b)) {
+          const tmp = a;
+          a = b;
+          b = tmp;
+        }
+
+        if (isType(a, 'time') && isDuration(b)) {
+          return a.plus(b).set({
+            year: 1900,
+            month: 1,
+            day: 1
+          });
+        } else if (isDateTime(a) && isDateTime(b)) {
+          return null;
+        } else if (isDateTime(a) && isDuration(b)) {
+          return a.plus(b);
+        } else if (isDuration(a) && isDuration(b)) {
+          return a.plus(b);
+        }
+
+        return a + b;
+      }, [ 'string', 'number', 'date', 'time', 'duration', 'date time' ]);
+      case '-': return nullable((a, b) => {
+        if (isType(a, 'time') && isDuration(b)) {
+          return a.minus(b).set({
+            year: 1900,
+            month: 1,
+            day: 1
+          });
+        } else if (isDateTime(a) && isDateTime(b)) {
+          return a.diff(b);
+        } else if (isDateTime(a) && isDuration(b)) {
+          return a.minus(b);
+        } else if (isDuration(a) && isDuration(b)) {
+          return a.minus(b);
+        }
+
+        return a - b;
+      }, [ 'number', 'date', 'time', 'duration', 'date time' ]);
+      case '*': return nullable((a, b) => a * b);
+      case '/': return nullable((a, b) => !b ? null : a / b);
+      case '**':
+      case '^': return nullable((a, b) => a ** b);
+      }
     };
-
-    switch (input) {
-    case '+': return nullable((a, b) => {
-
-      // flip these as luxon operations with durations aren't commutative
-      if (isDuration(a) && !isDuration(b)) {
-        const tmp = a;
-        a = b;
-        b = tmp;
-      }
-
-      if (isType(a, 'time') && isDuration(b)) {
-        return a.plus(b).set({
-          year: 1900,
-          month: 1,
-          day: 1
-        });
-      } else if (isDateTime(a) && isDateTime(b)) {
-        return null;
-      } else if (isDateTime(a) && isDuration(b)) {
-        return a.plus(b);
-      } else if (isDuration(a) && isDuration(b)) {
-        return a.plus(b);
-      }
-
-      return a + b;
-    }, [ 'string', 'number', 'date', 'time', 'duration', 'date time' ]);
-    case '-': return nullable((a, b) => {
-      if (isType(a, 'time') && isDuration(b)) {
-        return a.minus(b).set({
-          year: 1900,
-          month: 1,
-          day: 1
-        });
-      } else if (isDateTime(a) && isDateTime(b)) {
-        return a.diff(b);
-      } else if (isDateTime(a) && isDuration(b)) {
-        return a.minus(b);
-      } else if (isDuration(a) && isDuration(b)) {
-        return a.minus(b);
-      }
-
-      return a - b;
-    }, [ 'number', 'date', 'time', 'duration', 'date time' ]);
-    case '*': return nullable((a, b) => a * b);
-    case '/': return nullable((a, b) => !b ? null : a / b);
-    case '**':
-    case '^': return nullable((a, b) => a ** b);
-    }
-  };
+    return fn;
+  }
 
   case 'CompareOp': return tag(() => {
 
@@ -404,17 +488,29 @@ function evalNode(node: SyntaxNodeRef, input: string, args: any[]) {
   // spaces into one (token)
   case 'Name': return input.replace(/\s{2,}/g, ' ');
 
-  case 'VariableName': return (context) => {
-    const name = args.join(' ');
+  case 'VariableName': {
+    const fn = (context) => {
+      const name = args.join(' ');
 
-    const contextValue = getFromContext(name, context);
+      const contextValue = getFromContext(name, context);
 
-    return (
-      typeof contextValue !== 'undefined'
-        ? contextValue
-        : getBuiltin(name, context) || null
-    );
-  };
+      if (typeof contextValue !== 'undefined') {
+        return contextValue;
+      }
+
+      const builtin = getBuiltin(name, context);
+      
+      if (builtin) {
+        return builtin;
+      }
+
+      // Variable not found - emit warning
+      addWarning('NO_VARIABLE_FOUND', `Variable '${name}' not found`, fn);
+      
+      return null;
+    };
+    return fn;
+  }
 
   case 'QualifiedName': return (context) => {
     return args.reduce((context, arg) => arg(context), context);
@@ -579,60 +675,63 @@ function evalNode(node: SyntaxNodeRef, input: string, args: any[]) {
     return getBuiltin(input, context);
   };
 
-  case 'DateTimeLiteral': return (context) => {
+  case 'DateTimeLiteral': {
+    const fn = (context) => {
 
-    // AtLiteral
-    if (args.length === 1) {
-      return args[0](context);
-    }
+      // AtLiteral
+      if (args.length === 1) {
+        return args[0](context);
+      }
 
-    // FunctionInvocation
-    else {
-      const wrappedFn = wrapFunction(args[0](context));
+      // FunctionInvocation
+      else {
+        const wrappedFn = wrapFunction(args[0](context));
 
-      // TODO(nikku): indicate as error
-      // throw new Error(`Failed to evaluate ${input}: Target is not a function`);
+        if (!wrappedFn) {
+          addWarning('NOT_A_FUNCTION', 'Target is not a function', fn);
+          return null;
+        }
+
+        const contextOrArgs = args[2](context);
+
+        return wrappedFn.invoke(contextOrArgs);
+      }
+
+    };
+    return fn;
+  }
+
+  case 'AtLiteral': {
+    const fn = (context) => {
+
+      const wrappedFn = wrapFunction(getBuiltin('@', context));
 
       if (!wrappedFn) {
+        addWarning('NOT_A_FUNCTION', 'Target is not a function', fn);
+        return null;
+      }
+
+      return wrappedFn.invoke([ args[0](context) ]);
+    };
+    return fn;
+  }
+
+  case 'FunctionInvocation': {
+    const fn = (context) => {
+
+      const wrappedFn = wrapFunction(args[0](context));
+
+      if (!wrappedFn) {
+        addWarning('NOT_A_FUNCTION', 'Target is not a function', fn);
         return null;
       }
 
       const contextOrArgs = args[2](context);
 
       return wrappedFn.invoke(contextOrArgs);
-    }
-
-  };
-
-  case 'AtLiteral': return (context) => {
-
-    const wrappedFn = wrapFunction(getBuiltin('@', context));
-
-    // TODO(nikku): indicate as error
-    // throw new Error(`Failed to evaluate ${input}: Target is not a function`);
-
-    if (!wrappedFn) {
-      return null;
-    }
-
-    return wrappedFn.invoke([ args[0](context) ]);
-  };
-
-  case 'FunctionInvocation': return (context) => {
-
-    const wrappedFn = wrapFunction(args[0](context));
-
-    // TODO(nikku): indicate error at node
-    // throw new Error(`Failed to evaluate ${input}: Target is not a function`);
-
-    if (!wrappedFn) {
-      return null;
-    }
-
-    const contextOrArgs = args[2](context);
-
-    return wrappedFn.invoke(contextOrArgs);
-  };
+    };
+    return fn;
+  }
 
   case 'IfExpression': return (function() {
 
@@ -763,89 +862,93 @@ function evalNode(node: SyntaxNodeRef, input: string, args: any[]) {
   };
 
   // expression !filter "[" expression "]"
-  case 'FilterExpression': return (context) => {
+  case 'FilterExpression': {
+    const fn = (context) => {
 
-    const target = args[0](context);
+      const target = args[0](context);
 
-    const filterFn = args[2];
+      const filterFn = args[2];
 
-    const filterTarget = isArray(target) ? target : [ target ];
+      const filterTarget = isArray(target) ? target : [ target ];
 
-    // null[..]
-    if (target === null) {
-      return null;
-    }
+      // null[..]
+      if (target === null) {
+        return null;
+      }
 
-    // a[variable=number]
-    if (typeof filterFn.type === 'undefined') {
-      try {
+      // a[variable=number]
+      if (typeof filterFn.type === 'undefined') {
+        try {
+          const value = filterFn(context);
+
+          if (isNumber(value)) {
+            filterFn.type = 'number';
+          }
+        } catch (_err) {
+
+          // ignore
+        }
+      }
+
+      // a[1]
+      if (filterFn.type === 'number') {
+        const idx = filterFn(context);
+
+        const value = filterTarget[idx < 0 ? filterTarget.length + idx : idx - 1];
+
+        if (typeof value === 'undefined') {
+          addWarning('OUT_OF_BOUNDS', `Index ${idx} is out of bounds for array of length ${filterTarget.length}`, fn);
+          return null;
+        } else {
+          return value;
+        }
+      }
+
+      // a[true]
+      if (filterFn.type === 'boolean') {
+        if (filterFn(context)) {
+          return filterTarget;
+        } else {
+          return [];
+        }
+      }
+
+      if (filterFn.type === 'string') {
+
         const value = filterFn(context);
 
-        if (isNumber(value)) {
-          filterFn.type = 'number';
+        return filterTarget.filter(el => el === value);
+      }
+
+      // a[test]
+      return filterTarget.map(el => {
+
+        const iterationContext = {
+          ...context,
+          item: el,
+          ...el
+        };
+
+        let result = filterFn(iterationContext);
+
+        // test is fn(val) => boolean SimpleUnaryTest
+        if (typeof result === 'function') {
+          result = result(el);
         }
-      } catch (_err) {
 
-        // ignore
-      }
-    }
+        if (result instanceof Range) {
+          result = result.includes(el);
+        }
 
-    // a[1]
-    if (filterFn.type === 'number') {
-      const idx = filterFn(context);
+        if (result === true) {
+          return el;
+        }
 
-      const value = filterTarget[idx < 0 ? filterTarget.length + idx : idx - 1];
-
-      if (typeof value === 'undefined') {
-        return null;
-      } else {
-        return value;
-      }
-    }
-
-    // a[true]
-    if (filterFn.type === 'boolean') {
-      if (filterFn(context)) {
-        return filterTarget;
-      } else {
-        return [];
-      }
-    }
-
-    if (filterFn.type === 'string') {
-
-      const value = filterFn(context);
-
-      return filterTarget.filter(el => el === value);
-    }
-
-    // a[test]
-    return filterTarget.map(el => {
-
-      const iterationContext = {
-        ...context,
-        item: el,
-        ...el
-      };
-
-      let result = filterFn(iterationContext);
-
-      // test is fn(val) => boolean SimpleUnaryTest
-      if (typeof result === 'function') {
-        result = result(el);
-      }
-
-      if (result instanceof Range) {
-        result = result.includes(el);
-      }
-
-      if (result === true) {
-        return el;
-      }
-
-      return result;
-    }).filter(isTruthy);
-  };
+        return result;
+      }).filter(isTruthy);
+    };
+    return fn;
+  }
 
   case 'SimplePositiveUnaryTest': return tag((context) => {
 

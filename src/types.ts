@@ -325,3 +325,41 @@ export class FunctionWrapper {
     return this.fn.call(null, ...params);
   }
 }
+
+// Warning types
+export type WarningType =
+  | 'NO_VARIABLE_FOUND'
+  | 'INVALID_TYPE'
+  | 'NOT_A_FUNCTION'
+  | 'OUT_OF_BOUNDS'
+  | 'NULL_PROPAGATION';
+
+export type Warning = {
+  type: WarningType;
+  message: string;
+  position: {
+    from: number;
+    to: number;
+  };
+};
+
+export type EvaluationResult<T> = {
+  value: T;
+  warnings: Warning[];
+};
+
+export class WarningCollector {
+  warnings: Warning[] = [];
+
+  addWarning(type: WarningType, message: string, from: number, to: number): void {
+    this.warnings.push({
+      type,
+      message,
+      position: { from, to }
+    });
+  }
+
+  getWarnings(): Warning[] {
+    return this.warnings;
+  }
+}
