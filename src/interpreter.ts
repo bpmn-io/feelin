@@ -13,7 +13,8 @@ import {
   isType,
   isNumber,
   WarningCollector,
-  EvaluationResult
+  EvaluationResult,
+  WarningType
 } from './types.js';
 
 import {
@@ -61,6 +62,9 @@ export class SyntaxError extends Error {
 export type InterpreterContext = Record<string, any>;
 
 // Thread-local evaluation state
+// Note: This implementation uses module-level state for simplicity.
+// In concurrent/async environments, evaluations should be serialized or
+// a more sophisticated context management approach should be used.
 let currentCollector: WarningCollector | null = null;
 // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
 let currentNodePositions: Map<Function, { from: number; to: number }> | null = null;
@@ -259,7 +263,7 @@ export function evaluate(expression: string, context: InterpreterContext = {}, d
 
 // Helper to add warnings with position tracking
 // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
-function addWarning(type: string, message: string, fn?: Function): void {
+function addWarning(type: WarningType, message: string, fn?: Function): void {
   if (!currentCollector) {
     return;
   }
@@ -273,8 +277,7 @@ function addWarning(type: string, message: string, fn?: Function): void {
     to = pos.to;
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  currentCollector.addWarning(type as any, message, from, to);
+  currentCollector.addWarning(type, message, from, to);
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

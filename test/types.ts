@@ -35,6 +35,7 @@ describe('types', function() {
       });
 
       // then
+      // 5 is not in the list [10, 20], so this should be false
       expect(result.value).to.be.false;
       expect(result.warnings).to.be.an('array');
     });
