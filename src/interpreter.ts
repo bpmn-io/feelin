@@ -287,13 +287,28 @@ function evalNode(node: SyntaxNodeRef, input: string, args: any[]) {
   case 'ArithOp': {
     const fn = (context) => {
 
+      // Helper to format values for error messages
+      const formatValue = (val) => {
+        const type = getType(val);
+        if (type === 'list') {
+          return `[${val.length} items]`;
+        }
+        if (type === 'context') {
+          return '{...}';
+        }
+        if (type === 'nil') {
+          return 'null';
+        }
+        return String(val);
+      };
+
       const nullable = (op, opName, types = [ 'number' ]) => (a, b) => {
 
         const left = a(context);
         const right = b(context);
 
         if (isArray(left) || isArray(right)) {
-          addWarning('INVALID_TYPE', `Can't ${opName} '${right}' to '${left}'`, fn);
+          addWarning('INVALID_TYPE', `Can't ${opName} '${formatValue(right)}' to '${formatValue(left)}'`, fn);
           return null;
         }
 
@@ -304,11 +319,11 @@ function evalNode(node: SyntaxNodeRef, input: string, args: any[]) {
 
         if (temporal.includes(leftType)) {
           if (!temporal.includes(rightType)) {
-            addWarning('INVALID_TYPE', `Can't ${opName} '${right}' to '${left}'`, fn);
+            addWarning('INVALID_TYPE', `Can't ${opName} '${formatValue(right)}' to '${formatValue(left)}'`, fn);
             return null;
           }
         } else if (leftType !== rightType || !types.includes(leftType)) {
-          addWarning('INVALID_TYPE', `Can't ${opName} '${right}' to '${left}'`, fn);
+          addWarning('INVALID_TYPE', `Can't ${opName} '${formatValue(right)}' to '${formatValue(left)}'`, fn);
           return null;
         }
 
