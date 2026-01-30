@@ -18,6 +18,7 @@ ___Note:__ Yet to be released changes appear here._
 
 * `FIX`: correct incorrect warnings for `FilterExpression` ([#140](https://github.com/nikku/feelin/issues/140), [#141](https://github.com/nikku/feelin/pull/141))
 * `FIX`: cannot access list item within an expression ([#127](https://github.com/nikku/feelin/issues/127), [#141](https://github.com/nikku/feelin/pull/141))
+* `FIX`: correct filter expression creating new variables ([#107](https://github.com/nikku/feelin/issues/107))
 * `FIX`: correct `round*` built-ins for out-of-range scale ([`fa0cc388`](https://github.com/nikku/feelin/pull/141/commits/fa0cc38819226a7e43dc740f666afcb28bc0808a))
 
 ## 6.0.0
