@@ -697,6 +697,8 @@ describe('interpreter', function() {
 
       expr('["a", "b"][ "b" ]', [ 'b' ]);
 
+      expr('[1, 2][{ a: 10 }]', null);
+
       expr('null[false]', null);
 
       expr('null[true]', null);
