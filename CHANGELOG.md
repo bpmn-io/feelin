@@ -6,6 +6,10 @@ All notable changes to [feelin](https://github.com/nikku/feelin) are documented 
 
 ___Note:__ Yet to be released changes appear here._
 
+## 6.0.3
+
+* `FIX`: don't resolve built-ins on `null` property access ([#110](https://github.com/nikku/feelin/issues/110))
+
 ## 6.0.2
 
 * `FIX`: ensure `QuantifiedExpression` can be used in filter ([#142](https://github.com/nikku/feelin/issues/142))
