@@ -67,7 +67,7 @@ ___Note:__ Yet to be released changes appear here._
 
 ## 4.6.0
 
-* `FEAT`: implement `includes` function ([#123](https://github.com/nikku/feelin/pull/123))
+* `FEAT`: implement `includes` function ([#123](https://github.com/nikku/feelin/pull/123), [#93](https://github.com/nikku/feelin/issues/93))
 
 ## 4.5.0
 
