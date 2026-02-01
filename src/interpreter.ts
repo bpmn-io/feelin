@@ -239,7 +239,7 @@ function evalNode(node: SyntaxNodeRef, input: string, args: any[]) {
       }
 
       if (isType(a, 'time') && isDuration(b)) {
-        return a.plus(b).set({
+        return a.add(b).with({
           year: 1900,
           month: 1,
           day: 1
@@ -1179,7 +1179,20 @@ function createNumberRange(start, end, startIncluded, endIncluded) {
  */
 function createDurationRange(start, end, startIncluded, endIncluded) {
 
-  const toMillis = (d) => d ? Temporal.Duration.from(d).total({ unit: 'milliseconds' }) : null;
+  const toMillis = (d) => {
+    if (!d) return null;
+    
+    // Try to convert to milliseconds
+    // For durations with years/months, we need a relativeTo date
+    // Use a reference date (epoch) for comparison purposes
+    try {
+      return d.total({ unit: 'milliseconds' });
+    } catch (e) {
+      // If that fails, try with a relativeTo date
+      const now = Temporal.Now.plainDateTimeISO();
+      return d.total({ unit: 'milliseconds', relativeTo: now });
+    }
+  };
 
   const map = noopMap();
   const includes = anyIncludes(toMillis(start), toMillis(end), startIncluded, endIncluded, toMillis);
@@ -1197,8 +1210,10 @@ function createDurationRange(start, end, startIncluded, endIncluded) {
 
 
 function createDateTimeRange(start, end, startIncluded, endIncluded) {
+  const toMillis = (d) => d ? d.epochMilliseconds : null;
+  
   const map = noopMap();
-  const includes = anyIncludes(start, end, startIncluded, endIncluded);
+  const includes = anyIncludes(toMillis(start), toMillis(end), startIncluded, endIncluded, toMillis);
 
   return new Range({
     start,

@@ -220,10 +220,26 @@ export function equals(a, b, strict = false) {
   if (aType === 'duration') {
 
     // years and months duration -> months
-    const daysTotal = Math.abs(a.total({ unit: 'days' }));
+    // For durations with years/months, we need a relativeTo date
+    let daysTotal;
+    try {
+      daysTotal = Math.abs(a.total({ unit: 'days' }));
+    } catch (e) {
+      // Need relativeTo for this calculation
+      const now = Temporal.Now.plainDateISO();
+      daysTotal = Math.abs(a.total({ unit: 'days', relativeTo: now }));
+    }
+
     if (daysTotal > 180) {
       const diff = a.subtract(b);
-      return Math.trunc(diff.total({ unit: 'months' })) === 0;
+      let months;
+      try {
+        months = diff.total({ unit: 'months' });
+      } catch (e) {
+        const now = Temporal.Now.plainDateISO();
+        months = diff.total({ unit: 'months', relativeTo: now });
+      }
+      return Math.trunc(months) === 0;
     }
 
     // days and time duration -> seconds

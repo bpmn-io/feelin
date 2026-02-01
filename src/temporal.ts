@@ -82,9 +82,14 @@ export function date(str: string = null, time: string = null, zone: string = nul
       return Temporal.ZonedDateTime.from(upperStr);
     } catch {
       // If no time zone info, use UTC
-      // Only add 'Z' if not already present
-      const withZ = upperStr.endsWith('Z') ? upperStr : upperStr + 'Z';
-      return Temporal.Instant.from(withZ).toZonedDateTimeISO('UTC');
+      // Check if already has offset or Z
+      if (upperStr.match(/Z$|[+-]\d{2}:\d{2}$/)) {
+        // Already has timezone info, parse as Instant
+        return Temporal.Instant.from(upperStr).toZonedDateTimeISO('UTC');
+      } else {
+        // No timezone info, add Z and parse
+        return Temporal.Instant.from(upperStr + 'Z').toZonedDateTimeISO('UTC');
+      }
     }
   }
 
