@@ -1,10 +1,4 @@
-import {
-  DateTime,
-  Duration,
-  FixedOffsetZone,
-  Info,
-  Zone
-} from 'luxon';
+import { Temporal } from 'temporal-polyfill';
 
 import { isDateTime, isDuration } from './types.js';
 
@@ -15,30 +9,32 @@ export {
 
 import { notImplemented } from './utils.js';
 
+export type TemporalDateTime = Temporal.ZonedDateTime;
+export type TemporalDuration = Temporal.Duration;
 
 export function ms(temporal) {
 
   if (isDateTime(temporal)) {
-    return temporal.valueOf();
+    return temporal.epochMilliseconds;
   }
 
   if (isDuration(temporal)) {
-    return temporal.valueOf();
+    return temporal.total({ unit: 'milliseconds' });
   }
 
   return null;
 }
 
-export function duration(opts: string|number) : Duration {
+export function duration(opts: string|number) : TemporalDuration {
 
   if (typeof opts === 'number') {
-    return Duration.fromMillis(opts);
+    return Temporal.Duration.from({ milliseconds: opts });
   }
 
-  return Duration.fromISO(opts);
+  return Temporal.Duration.from(opts);
 }
 
-export function date(str: string = null, time: string = null, zone: Zone = null) : DateTime {
+export function date(str: string = null, time: string = null, zone: string = null) : TemporalDateTime {
 
   if (time) {
     if (str) {
@@ -57,7 +53,7 @@ export function date(str: string = null, time: string = null, zone: Zone = null)
     if (!str.includes('T')) {
 
       // raw dates are in UTC time zone
-      return date(str + 'T00:00:00', null, zone || FixedOffsetZone.utcInstance);
+      return date(str + 'T00:00:00', null, zone || 'UTC');
     }
 
     if (str.includes('@')) {
@@ -68,14 +64,29 @@ export function date(str: string = null, time: string = null, zone: Zone = null)
 
       const [ datePart, zonePart ] = str.split('@');
 
-      return date(datePart, null, Info.normalizeZone(zonePart));
+      return date(datePart, null, zonePart);
     }
 
-    return DateTime.fromISO(str.toUpperCase(), {
-      setZone: true,
-      zone
-    });
+    // Parse ISO string with time zone
+    const upperStr = str.toUpperCase();
+    
+    // If zone is provided, append it
+    if (zone) {
+      // Remove any existing zone info from the string
+      const cleanStr = upperStr.replace(/Z$/i, '').replace(/[+-]\d{2}:\d{2}$/, '');
+      return Temporal.ZonedDateTime.from(`${cleanStr}[${zone}]`);
+    }
+
+    // Try to parse as ZonedDateTime (includes time zone info)
+    try {
+      return Temporal.ZonedDateTime.from(upperStr);
+    } catch {
+      // If no time zone info, use UTC
+      // Only add 'Z' if not already present
+      const withZ = upperStr.endsWith('Z') ? upperStr : upperStr + 'Z';
+      return Temporal.Instant.from(withZ).toZonedDateTimeISO('UTC');
+    }
   }
 
-  return DateTime.now();
+  return Temporal.Now.zonedDateTimeISO();
 }

@@ -21,7 +21,9 @@ import {
   isDateTime
 } from './temporal.js';
 
-import { DateTime, Duration, SystemZone } from 'luxon';
+import { Temporal } from 'temporal-polyfill';
+
+import type { TemporalDateTime, TemporalDuration } from './temporal.js';
 
 
 const names = [
@@ -193,14 +195,14 @@ const builtins = {
         return null;
       }
 
-      d = date().setZone('utc').set({
+      d = date().withTimeZone('UTC').with({
         year,
         month,
         day
       });
     }
 
-    return d && ifValid(d.setZone('utc').startOf('day')) || null;
+    return d && ifValid(d.withTimeZone('UTC').startOfDay()) || null;
   }, [ 'any?', 'number?', 'number?', 'any?' ]),
 
   // date and time(from) => date time string
@@ -211,9 +213,11 @@ const builtins = {
 
     if (isDateTime(d) && isDateTime(time)) {
 
-      const dLocal = d.toLocal();
+      // Convert to local time zone
+      const systemTZ = Temporal.Now.timeZoneId();
+      const dLocal = d.withTimeZone(systemTZ);
 
-      dt = time.set({
+      dt = time.with({
         year: dLocal.year,
         month: dLocal.month,
         day: dLocal.day
@@ -226,7 +230,9 @@ const builtins = {
     }
 
     if (isString(from)) {
-      dt = date(from, null, from.includes('@') ? null : SystemZone.instance);
+      // Use system time zone if no zone specified
+      const systemTZ = Temporal.Now.timeZoneId();
+      dt = date(from, null, from.includes('@') ? null : systemTZ);
     }
 
     return dt && ifValid(dt) || null;
@@ -253,7 +259,7 @@ const builtins = {
     }
 
     if (isDateTime(from)) {
-      t = from.set({
+      t = from.with({
         year: 1900,
         month: 1,
         day: 1
@@ -267,11 +273,11 @@ const builtins = {
       }
 
       // TODO: support offset = days and time duration
-      t = date().set({
+      t = date().with({
         hour,
         minute,
         second
-      }).set({
+      }).with({
         year: 1900,
         month: 1,
         day: 1,
@@ -314,7 +320,7 @@ const builtins = {
   }, []),
 
   'today': fn(function() {
-    return date().startOf('day');
+    return date().startOfDay();
   }, []),
 
   // 10.3.4.2 Boolean function
@@ -1140,23 +1146,33 @@ function toString(obj, wrap = false) {
   }
 
   if (type === 'duration') {
-    return obj.shiftTo('years', 'months', 'days', 'hours', 'minutes', 'seconds').normalize().toISO();
+    // Normalize and convert to ISO string
+    return obj.toString();
   }
 
   if (type === 'date time') {
-    if (obj.zone === SystemZone.instance) {
-      return obj.toISO({ suppressMilliseconds: true, includeOffset: false });
+    const systemTZ = Temporal.Now.timeZoneId();
+    
+    if (obj.timeZoneId === systemTZ) {
+      // Format without offset for system time zone
+      const instant = obj.toInstant();
+      const plainDateTime = instant.toZonedDateTimeISO(systemTZ).toPlainDateTime();
+      return plainDateTime.toString().replace(/\.\d+$/, '');
     }
 
-    if (obj.zone?.zoneName) {
-      return obj.toISO({ suppressMilliseconds: true, includeOffset: false }) + '@' + obj.zone?.zoneName;
+    if (obj.timeZoneId) {
+      // Format with time zone
+      const instant = obj.toInstant();
+      const plainDateTime = instant.toZonedDateTimeISO(obj.timeZoneId).toPlainDateTime();
+      const formatted = plainDateTime.toString().replace(/\.\d+$/, '');
+      return formatted + '@' + obj.timeZoneId;
     }
 
-    return obj.toISO({ suppressMilliseconds: true });
+    return obj.toString({ timeZoneName: 'never', smallestUnit: 'second' });
   }
 
   if (type === 'date') {
-    return obj.toISODate();
+    return obj.toPlainDate().toString();
   }
 
   if (type === 'range') {
@@ -1164,15 +1180,23 @@ function toString(obj, wrap = false) {
   }
 
   if (type === 'time') {
-    if (obj.zone === SystemZone.instance) {
-      return obj.toISOTime({ suppressMilliseconds: true, includeOffset: false });
+    const systemTZ = Temporal.Now.timeZoneId();
+    
+    if (obj.timeZoneId === systemTZ) {
+      // Format without offset for system time zone
+      const plainTime = obj.toPlainTime();
+      return plainTime.toString().replace(/\.\d+$/, '');
     }
 
-    if (obj.zone?.zoneName) {
-      return obj.toISOTime({ suppressMilliseconds: true, includeOffset: false }) + '@' + obj.zone?.zoneName;
+    if (obj.timeZoneId) {
+      // Format with time zone
+      const plainTime = obj.toPlainTime();
+      const formatted = plainTime.toString().replace(/\.\d+$/, '');
+      return formatted + '@' + obj.timeZoneId;
     }
 
-    return obj.toISOTime({ suppressMilliseconds: true });
+    const plainTime = obj.toPlainTime();
+    return plainTime.toString({ smallestUnit: 'second' });
   }
 
   if (type === 'function') {
@@ -1263,8 +1287,9 @@ function mode(array: number[]) {
   return sorted.filter(s => s[1] === sorted[0][1]).map(e => +e[0]);
 }
 
-function ifValid<T extends DateTime | Duration>(o: T) : T | null {
-  return o.isValid ? o : null;
+function ifValid<T extends TemporalDateTime | TemporalDuration>(o: T) : T | null {
+  // Temporal objects are always valid, no isValid property
+  return o;
 }
 
 /**
