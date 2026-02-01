@@ -62,10 +62,6 @@ export function getType(e) {
     }
 
     // A 'date' is at midnight in UTC timezone
-    // UNLESS it was created as a date-time in system timezone that happens to be UTC
-    // We distinguish by checking if it's exactly at midnight and timeZone is explicitly 'UTC'
-    // But if system timezone is UTC, we can't distinguish, so we need to be more careful
-    // The rule: Only classify as 'date' if at midnight AND timezone is 'UTC' AND it's not a named timezone
     if (
       e.hour === 0 &&
       e.minute === 0 &&
@@ -73,8 +69,6 @@ export function getType(e) {
       e.millisecond === 0 &&
       e.timeZoneId === 'UTC'
     ) {
-      // Still could be a date-time if created via date and time() when system TZ is UTC
-      // For now, stick with the simple rule - this may need refinement
       return 'date';
     }
 

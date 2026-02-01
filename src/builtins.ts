@@ -230,15 +230,8 @@ const builtins = {
     }
 
     if (isString(from)) {
-      // Use system time zone if no zone specified
-      let zone = null;
-      if (from.includes('@')) {
-        zone = null; // Will be parsed from string
-      } else {
-        const systemTZ = Temporal.Now.timeZoneId();
-        // Use system timezone directly
-        zone = systemTZ;
-      }
+      // Use system time zone if no zone specified in the string
+      const zone = from.includes('@') ? null : Temporal.Now.timeZoneId();
       dt = date(from, null, zone);
     }
 
@@ -300,7 +293,7 @@ const builtins = {
   }, [ 'string' ]),
 
   'years and months duration': fn(function(from, to) {
-    // Use since/until for Temporal
+    // Use until() for Temporal API
     return ifValid(from.until(to, { largestUnit: 'months' }));
   }, [ 'date', 'date' ]),
 
