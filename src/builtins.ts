@@ -231,15 +231,13 @@ const builtins = {
 
     if (isString(from)) {
       // Use system time zone if no zone specified
-      // Special case: if system timezone is 'UTC', use a named timezone to distinguish
-      // from dates (which always use 'UTC')
       let zone = null;
       if (from.includes('@')) {
         zone = null; // Will be parsed from string
       } else {
         const systemTZ = Temporal.Now.timeZoneId();
-        // If system is UTC, use 'Etc/UTC' to distinguish from date() which uses 'UTC'
-        zone = systemTZ === 'UTC' ? 'Etc/UTC' : systemTZ;
+        // Use system timezone directly
+        zone = systemTZ;
       }
       dt = date(from, null, zone);
     }
@@ -1177,19 +1175,17 @@ function toString(obj, wrap = false) {
       return str + 'Z';
     }
 
-    // Check if Etc/UTC (used for date-time in UTC when system is UTC)
+    // Check if Etc/UTC - treat as named timezone, always output with @
     if (obj.timeZoneId === 'Etc/UTC') {
       const plainDateTime = obj.toPlainDateTime();
       let str = plainDateTime.toString();
       // Remove fractional seconds only if they are .000
       str = str.replace(/\.000$/, '').replace(/\.000000000$/, '');
-      // Return without Z for Etc/UTC (it's a floating system time)
-      return str;
+      return str + '@Etc/UTC';
     }
 
-    // Check if this is system time zone (without named zone)
+    // Check if this is system time zone
     if (obj.timeZoneId === systemTZ) {
-      // Format without offset for system time zone
       const plainDateTime = obj.toPlainDateTime();
       let str = plainDateTime.toString();
       // Remove fractional seconds only if they are .000
