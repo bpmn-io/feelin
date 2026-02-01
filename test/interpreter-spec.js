@@ -460,7 +460,7 @@ describe('interpreter', function() {
       expr('"CC" in ["AA".."ZZ"]', true);
       expr('"AA" in ["AA".."ZZ"]', true);
       expr('"ZZ" in ["AA".."ZZ"]', true);
-      expr('"AAA" in ["AA".."ZZ"]', true);  // "AAA" is lexicographically between "AA" and "ZZ"
+      expr('"AAA" in ["AA".."ZZ"]', true); // "AAA" is lexicographically between "AA" and "ZZ"
       expr('"ZZZ" in ["AA".."ZZ"]', false); // "ZZZ" > "ZZ"
 
       // Multi-character string comparisons
