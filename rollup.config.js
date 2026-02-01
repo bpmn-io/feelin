@@ -23,7 +23,7 @@ export default [
     external: [
       'lezer',
       'lezer-feel',
-      'luxon'
+      'temporal-polyfill'
     ],
     plugins: [
       typescript()

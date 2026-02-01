@@ -25,7 +25,8 @@ import {
   parseUnaryTests
 } from './parser.js';
 
-import { Duration } from 'luxon';
+import { Temporal } from 'temporal-polyfill';
+import type { TemporalDuration } from './temporal.js';
 
 
 type SyntaxErrorDetails = {
@@ -238,7 +239,7 @@ function evalNode(node: SyntaxNodeRef, input: string, args: any[]) {
       }
 
       if (isType(a, 'time') && isDuration(b)) {
-        return a.plus(b).set({
+        return a.add(b).with({
           year: 1900,
           month: 1,
           day: 1
@@ -246,26 +247,26 @@ function evalNode(node: SyntaxNodeRef, input: string, args: any[]) {
       } else if (isDateTime(a) && isDateTime(b)) {
         return null;
       } else if (isDateTime(a) && isDuration(b)) {
-        return a.plus(b);
+        return a.add(b);
       } else if (isDuration(a) && isDuration(b)) {
-        return a.plus(b);
+        return a.add(b);
       }
 
       return a + b;
     }, [ 'string', 'number', 'date', 'time', 'duration', 'date time' ]);
     case '-': return nullable((a, b) => {
       if (isType(a, 'time') && isDuration(b)) {
-        return a.minus(b).set({
+        return a.subtract(b).with({
           year: 1900,
           month: 1,
           day: 1
         });
       } else if (isDateTime(a) && isDateTime(b)) {
-        return a.diff(b);
+        return a.since(b);
       } else if (isDateTime(a) && isDuration(b)) {
-        return a.minus(b);
+        return a.subtract(b);
       } else if (isDuration(a) && isDuration(b)) {
-        return a.minus(b);
+        return a.subtract(b);
       }
 
       return a - b;
@@ -1171,14 +1172,27 @@ function createNumberRange(start, end, startIncluded, endIncluded) {
 }
 
 /**
- * @param {Duration} start
- * @param {Duration} end
+ * @param {TemporalDuration} start
+ * @param {TemporalDuration} end
  * @param {boolean} startIncluded
  * @param {boolean} endIncluded
  */
 function createDurationRange(start, end, startIncluded, endIncluded) {
 
-  const toMillis = (d) => d ? Duration.fromDurationLike(d).toMillis() : null;
+  const toMillis = (d) => {
+    if (!d) return null;
+    
+    // Try to convert to milliseconds
+    // For durations with years/months, we need a relativeTo date
+    // Use a reference date (epoch) for comparison purposes
+    try {
+      return d.total({ unit: 'milliseconds' });
+    } catch (e) {
+      // If that fails, try with a relativeTo date
+      const now = Temporal.Now.plainDateTimeISO();
+      return d.total({ unit: 'milliseconds', relativeTo: now });
+    }
+  };
 
   const map = noopMap();
   const includes = anyIncludes(toMillis(start), toMillis(end), startIncluded, endIncluded, toMillis);
@@ -1196,8 +1210,10 @@ function createDurationRange(start, end, startIncluded, endIncluded) {
 
 
 function createDateTimeRange(start, end, startIncluded, endIncluded) {
+  const toMillis = (d) => d ? d.epochMilliseconds : null;
+  
   const map = noopMap();
-  const includes = anyIncludes(start, end, startIncluded, endIncluded);
+  const includes = anyIncludes(toMillis(start), toMillis(end), startIncluded, endIncluded, toMillis);
 
   return new Range({
     start,

@@ -21,7 +21,9 @@ import {
   isDateTime
 } from './temporal.js';
 
-import { DateTime, Duration, SystemZone } from 'luxon';
+import { Temporal } from 'temporal-polyfill';
+
+import type { TemporalDateTime, TemporalDuration } from './temporal.js';
 
 
 const names = [
@@ -193,14 +195,14 @@ const builtins = {
         return null;
       }
 
-      d = date().setZone('utc').set({
+      d = date().withTimeZone('UTC').with({
         year,
         month,
         day
       });
     }
 
-    return d && ifValid(d.setZone('utc').startOf('day')) || null;
+    return d && ifValid(d.withTimeZone('UTC').startOfDay()) || null;
   }, [ 'any?', 'number?', 'number?', 'any?' ]),
 
   // date and time(from) => date time string
@@ -211,9 +213,11 @@ const builtins = {
 
     if (isDateTime(d) && isDateTime(time)) {
 
-      const dLocal = d.toLocal();
+      // Convert to local time zone
+      const systemTZ = Temporal.Now.timeZoneId();
+      const dLocal = d.withTimeZone(systemTZ);
 
-      dt = time.set({
+      dt = time.with({
         year: dLocal.year,
         month: dLocal.month,
         day: dLocal.day
@@ -226,7 +230,9 @@ const builtins = {
     }
 
     if (isString(from)) {
-      dt = date(from, null, from.includes('@') ? null : SystemZone.instance);
+      // Use system time zone if no zone specified in the string
+      const zone = from.includes('@') ? null : Temporal.Now.timeZoneId();
+      dt = date(from, null, zone);
     }
 
     return dt && ifValid(dt) || null;
@@ -253,7 +259,7 @@ const builtins = {
     }
 
     if (isDateTime(from)) {
-      t = from.set({
+      t = from.with({
         year: 1900,
         month: 1,
         day: 1
@@ -267,11 +273,11 @@ const builtins = {
       }
 
       // TODO: support offset = days and time duration
-      t = date().set({
+      t = date().with({
         hour,
         minute,
         second
-      }).set({
+      }).with({
         year: 1900,
         month: 1,
         day: 1,
@@ -287,7 +293,8 @@ const builtins = {
   }, [ 'string' ]),
 
   'years and months duration': fn(function(from, to) {
-    return ifValid(to.diff(from, [ 'years', 'months' ]));
+    // Use until() for Temporal API
+    return ifValid(from.until(to, { largestUnit: 'months' }));
   }, [ 'date', 'date' ]),
 
   '@': fn(function(string) {
@@ -314,7 +321,7 @@ const builtins = {
   }, []),
 
   'today': fn(function() {
-    return date().startOf('day');
+    return date().startOfDay();
   }, []),
 
   // 10.3.4.2 Boolean function
@@ -778,19 +785,24 @@ const builtins = {
   // 10.3.4.8 Temporal built-in functions
 
   'day of year': fn(function(date) {
-    return date.ordinal;
+    return date.dayOfYear;
   }, [ 'date time' ]),
 
   'day of week': fn(function(date) {
-    return date.weekdayLong;
+    // Convert day of week number (1-7, Mon-Sun) to day name
+    const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    return days[date.dayOfWeek - 1];
   }, [ 'date time' ]),
 
   'month of year': fn(function(date) {
-    return date.monthLong;
+    // Convert month number (1-12) to month name
+    const months = ['January', 'February', 'March', 'April', 'May', 'June', 
+                    'July', 'August', 'September', 'October', 'November', 'December'];
+    return months[date.month - 1];
   }, [ 'date time' ]),
 
   'week of year': fn(function(date) {
-    return date.weekNumber;
+    return date.weekOfYear;
   }, [ 'date time' ]),
 
 
@@ -1140,23 +1152,50 @@ function toString(obj, wrap = false) {
   }
 
   if (type === 'duration') {
-    return obj.shiftTo('years', 'months', 'days', 'hours', 'minutes', 'seconds').normalize().toISO();
+    // Normalize and convert to ISO string
+    return obj.toString();
   }
 
   if (type === 'date time') {
-    if (obj.zone === SystemZone.instance) {
-      return obj.toISO({ suppressMilliseconds: true, includeOffset: false });
+    const systemTZ = Temporal.Now.timeZoneId();
+    
+    // Check if UTC (without named zone) - must check before systemTZ
+    if (obj.timeZoneId === 'UTC') {
+      const plainDateTime = obj.toPlainDateTime();
+      let str = plainDateTime.toString();
+      // Remove fractional seconds only if they are .000
+      str = str.replace(/\.000$/, '').replace(/\.000000000$/, '');
+      return str + 'Z';
     }
 
-    if (obj.zone?.zoneName) {
-      return obj.toISO({ suppressMilliseconds: true, includeOffset: false }) + '@' + obj.zone?.zoneName;
+    // Check if Etc/UTC - treat as named timezone, always output with @
+    if (obj.timeZoneId === 'Etc/UTC') {
+      const plainDateTime = obj.toPlainDateTime();
+      let str = plainDateTime.toString();
+      // Remove fractional seconds only if they are .000
+      str = str.replace(/\.000$/, '').replace(/\.000000000$/, '');
+      return str + '@Etc/UTC';
     }
 
-    return obj.toISO({ suppressMilliseconds: true });
+    // Check if this is system time zone
+    if (obj.timeZoneId === systemTZ) {
+      const plainDateTime = obj.toPlainDateTime();
+      let str = plainDateTime.toString();
+      // Remove fractional seconds only if they are .000
+      str = str.replace(/\.000$/, '').replace(/\.000000000$/, '');
+      return str;
+    }
+
+    // Named time zone - format with @ notation
+    const plainDateTime = obj.toPlainDateTime();
+    let str = plainDateTime.toString();
+    // Remove fractional seconds only if they are .000
+    str = str.replace(/\.000$/, '').replace(/\.000000000$/, '');
+    return str + '@' + obj.timeZoneId;
   }
 
   if (type === 'date') {
-    return obj.toISODate();
+    return obj.toPlainDate().toString();
   }
 
   if (type === 'range') {
@@ -1164,15 +1203,32 @@ function toString(obj, wrap = false) {
   }
 
   if (type === 'time') {
-    if (obj.zone === SystemZone.instance) {
-      return obj.toISOTime({ suppressMilliseconds: true, includeOffset: false });
+    const systemTZ = Temporal.Now.timeZoneId();
+    
+    // Check if this is system time zone
+    if (obj.timeZoneId === systemTZ) {
+      const plainTime = obj.toPlainTime();
+      let str = plainTime.toString();
+      // Remove fractional seconds only if they are .000
+      str = str.replace(/\.000$/, '').replace(/\.000000000$/, '');
+      return str;
     }
 
-    if (obj.zone?.zoneName) {
-      return obj.toISOTime({ suppressMilliseconds: true, includeOffset: false }) + '@' + obj.zone?.zoneName;
+    // Check if UTC
+    if (obj.timeZoneId === 'UTC') {
+      const plainTime = obj.toPlainTime();
+      let str = plainTime.toString();
+      // Remove fractional seconds only if they are .000
+      str = str.replace(/\.000$/, '').replace(/\.000000000$/, '');
+      return str + 'Z';
     }
 
-    return obj.toISOTime({ suppressMilliseconds: true });
+    // Named time zone
+    const plainTime = obj.toPlainTime();
+    let str = plainTime.toString();
+    // Remove fractional seconds only if they are .000
+    str = str.replace(/\.000$/, '').replace(/\.000000000$/, '');
+    return str + '@' + obj.timeZoneId;
   }
 
   if (type === 'function') {
@@ -1263,8 +1319,9 @@ function mode(array: number[]) {
   return sorted.filter(s => s[1] === sorted[0][1]).map(e => +e[0]);
 }
 
-function ifValid<T extends DateTime | Duration>(o: T) : T | null {
-  return o.isValid ? o : null;
+function ifValid<T extends TemporalDateTime | TemporalDuration>(o: T) : T | null {
+  // Temporal objects are always valid, no isValid property
+  return o;
 }
 
 /**

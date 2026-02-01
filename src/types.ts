@@ -1,20 +1,17 @@
-import {
-  DateTime,
-  Duration,
-  FixedOffsetZone,
-  SystemZone
-} from 'luxon';
+import { Temporal } from 'temporal-polyfill';
+
+import type { TemporalDateTime, TemporalDuration } from './temporal.js';
 
 export function isContext(e) {
   return Object.getPrototypeOf(e) === Object.prototype;
 }
 
-export function isDateTime(obj): obj is DateTime {
-  return DateTime.isDateTime(obj);
+export function isDateTime(obj): obj is TemporalDateTime {
+  return obj instanceof Temporal.ZonedDateTime;
 }
 
-export function isDuration(obj): obj is Duration {
-  return Duration.isDuration(obj);
+export function isDuration(obj): obj is TemporalDuration {
+  return obj instanceof Temporal.Duration;
 }
 
 export function isArray(e) {
@@ -64,12 +61,13 @@ export function getType(e) {
       return 'time';
     }
 
+    // A 'date' is at midnight in UTC timezone
     if (
       e.hour === 0 &&
       e.minute === 0 &&
       e.second === 0 &&
       e.millisecond === 0 &&
-      e.zone === FixedOffsetZone.utcInstance
+      e.timeZoneId === 'UTC'
     ) {
       return 'date';
     }
@@ -98,7 +96,7 @@ export function typeCast(obj: any, type: string) {
   if (isDateTime(obj)) {
 
     if (type === 'time') {
-      return obj.set({
+      return obj.with({
         year: 1900,
         month: 1,
         day: 1
@@ -106,7 +104,7 @@ export function typeCast(obj: any, type: string) {
     }
 
     if (type === 'date') {
-      return obj.setZone('utc', { keepLocalTime: true }).startOf('day');
+      return obj.withTimeZone('UTC').startOfDay();
     }
 
     if (type === 'date time') {
@@ -191,10 +189,14 @@ export function equals(a, b, strict = false) {
       return null;
     }
 
-    if (strict || a.zone === SystemZone.instance || b.zone === SystemZone.instance) {
+    // Check if either is using system time zone
+    const aIsSystem = a.timeZoneId === Temporal.Now.timeZoneId();
+    const bIsSystem = b.timeZoneId === Temporal.Now.timeZoneId();
+    
+    if (strict || aIsSystem || bIsSystem) {
       return a.equals(b);
     } else {
-      return a.toUTC().valueOf() === b.toUTC().valueOf();
+      return a.epochMilliseconds === b.epochMilliseconds;
     }
   }
 
@@ -219,13 +221,32 @@ export function equals(a, b, strict = false) {
   if (aType === 'duration') {
 
     // years and months duration -> months
-    if (Math.abs(a.as('days')) > 180) {
-      return Math.trunc(a.minus(b).as('months')) === 0;
+    // For durations with years/months, we need a relativeTo date
+    let daysTotal;
+    try {
+      daysTotal = Math.abs(a.total({ unit: 'days' }));
+    } catch (e) {
+      // Need relativeTo for this calculation
+      const now = Temporal.Now.plainDateISO();
+      daysTotal = Math.abs(a.total({ unit: 'days', relativeTo: now }));
+    }
+
+    if (daysTotal > 180) {
+      const diff = a.subtract(b);
+      let months;
+      try {
+        months = diff.total({ unit: 'months' });
+      } catch (e) {
+        const now = Temporal.Now.plainDateISO();
+        months = diff.total({ unit: 'months', relativeTo: now });
+      }
+      return Math.trunc(months) === 0;
     }
 
     // days and time duration -> seconds
     else {
-      return Math.trunc(a.minus(b).as('seconds')) === 0;
+      const diff = a.subtract(b);
+      return Math.trunc(diff.total({ unit: 'seconds' })) === 0;
     }
 
   }
