@@ -52,7 +52,8 @@ export function date(str: string = null, time: string = null, zone: string = nul
 
     if (!str.includes('T')) {
 
-      // raw dates are in UTC time zone
+      // raw dates - if no zone specified, use UTC for date() calls
+      // but for date and time() calls, zone would be passed explicitly
       return date(str + 'T00:00:00', null, zone || 'UTC');
     }
 
@@ -70,25 +71,39 @@ export function date(str: string = null, time: string = null, zone: string = nul
     // Parse ISO string with time zone
     const upperStr = str.toUpperCase();
     
-    // If zone is provided, append it
-    if (zone) {
-      // Remove any existing zone info from the string
+    // Check if string already has timezone info
+    const hasTimezone = upperStr.includes('@') || upperStr.endsWith('Z') || upperStr.match(/[+-]\d{2}:\d{2}$/);
+    
+    // If zone is provided AND string doesn't have timezone, apply it
+    if (zone && !hasTimezone) {
+      // Remove any existing zone info from the string (shouldn't be any)
       const cleanStr = upperStr.replace(/Z$/i, '').replace(/[+-]\d{2}:\d{2}$/, '');
       return Temporal.ZonedDateTime.from(`${cleanStr}[${zone}]`);
+    }
+
+    // Handle @ notation for named timezones
+    if (upperStr.includes('@')) {
+      if (zone) {
+        throw new Error('<zone> already provided');
+      }
+
+      const [ datePart, zonePart ] = upperStr.split('@');
+
+      return date(datePart, null, zonePart);
     }
 
     // Try to parse as ZonedDateTime (includes time zone info)
     try {
       return Temporal.ZonedDateTime.from(upperStr);
     } catch {
-      // If no time zone info, use UTC
+      // If no time zone info, parse as Instant and convert to timezone
       // Check if already has offset or Z
       if (upperStr.match(/Z$|[+-]\d{2}:\d{2}$/)) {
-        // Already has timezone info, parse as Instant
+        // Already has timezone info, parse as Instant and use UTC
         return Temporal.Instant.from(upperStr).toZonedDateTimeISO('UTC');
       } else {
-        // No timezone info, add Z and parse
-        return Temporal.Instant.from(upperStr + 'Z').toZonedDateTimeISO('UTC');
+        // No timezone info, add Z and parse with provided zone or UTC
+        return Temporal.Instant.from(upperStr + 'Z').toZonedDateTimeISO(zone || 'UTC');
       }
     }
   }

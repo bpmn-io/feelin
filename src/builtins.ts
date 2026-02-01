@@ -231,8 +231,17 @@ const builtins = {
 
     if (isString(from)) {
       // Use system time zone if no zone specified
-      const systemTZ = Temporal.Now.timeZoneId();
-      dt = date(from, null, from.includes('@') ? null : systemTZ);
+      // Special case: if system timezone is 'UTC', use a named timezone to distinguish
+      // from dates (which always use 'UTC')
+      let zone = null;
+      if (from.includes('@')) {
+        zone = null; // Will be parsed from string
+      } else {
+        const systemTZ = Temporal.Now.timeZoneId();
+        // If system is UTC, use 'Etc/UTC' to distinguish from date() which uses 'UTC'
+        zone = systemTZ === 'UTC' ? 'Etc/UTC' : systemTZ;
+      }
+      dt = date(from, null, zone);
     }
 
     return dt && ifValid(dt) || null;
@@ -1159,6 +1168,25 @@ function toString(obj, wrap = false) {
   if (type === 'date time') {
     const systemTZ = Temporal.Now.timeZoneId();
     
+    // Check if UTC (without named zone) - must check before systemTZ
+    if (obj.timeZoneId === 'UTC') {
+      const plainDateTime = obj.toPlainDateTime();
+      let str = plainDateTime.toString();
+      // Remove fractional seconds only if they are .000
+      str = str.replace(/\.000$/, '').replace(/\.000000000$/, '');
+      return str + 'Z';
+    }
+
+    // Check if Etc/UTC (used for date-time in UTC when system is UTC)
+    if (obj.timeZoneId === 'Etc/UTC') {
+      const plainDateTime = obj.toPlainDateTime();
+      let str = plainDateTime.toString();
+      // Remove fractional seconds only if they are .000
+      str = str.replace(/\.000$/, '').replace(/\.000000000$/, '');
+      // Return without Z for Etc/UTC (it's a floating system time)
+      return str;
+    }
+
     // Check if this is system time zone (without named zone)
     if (obj.timeZoneId === systemTZ) {
       // Format without offset for system time zone
@@ -1167,15 +1195,6 @@ function toString(obj, wrap = false) {
       // Remove fractional seconds only if they are .000
       str = str.replace(/\.000$/, '').replace(/\.000000000$/, '');
       return str;
-    }
-
-    // Check if UTC
-    if (obj.timeZoneId === 'UTC') {
-      const plainDateTime = obj.toPlainDateTime();
-      let str = plainDateTime.toString();
-      // Remove fractional seconds only if they are .000
-      str = str.replace(/\.000$/, '').replace(/\.000000000$/, '');
-      return str + 'Z';
     }
 
     // Named time zone - format with @ notation
