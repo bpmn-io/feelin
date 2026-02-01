@@ -6,6 +6,10 @@ All notable changes to [feelin](https://github.com/nikku/feelin) are documented 
 
 ___Note:__ Yet to be released changes appear here._
 
+## 6.1.0
+
+* `FEAT`: allow comparison of strings ([#94](https://github.com/nikku/feelin/issues/94), [#73](https://github.com/nikku/feelin/issues/73), [#145](https://github.com/nikku/feelin/pull/145))
+
 ## 6.0.3
 
 * `FIX`: don't resolve built-ins on `null` property access ([#110](https://github.com/nikku/feelin/issues/110))
