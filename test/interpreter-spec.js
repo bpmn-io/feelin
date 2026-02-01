@@ -449,6 +449,27 @@ describe('interpreter', function() {
       expr('"b" in ["b".."d"]', true);
       expr('"b" in ("b".."d"]', false);
 
+      // Multi-character string ranges
+      expr('"1016AB" in ["1015CJ".."1020ZZ"]', true);
+      expr('"1015CJ" in ["1015CJ".."1020ZZ"]', true);
+      expr('"1020ZZ" in ["1015CJ".."1020ZZ"]', true);
+      expr('"1015CJ" in ("1015CJ".."1020ZZ"]', false);
+      expr('"1020ZZ" in ["1015CJ".."1020ZZ")', false);
+      expr('"1014AA" in ["1015CJ".."1020ZZ"]', false);
+      expr('"1021AA" in ["1015CJ".."1020ZZ"]', false);
+      expr('"CC" in ["AA".."ZZ"]', true);
+      expr('"AA" in ["AA".."ZZ"]', true);
+      expr('"ZZ" in ["AA".."ZZ"]', true);
+      expr('"AAA" in ["AA".."ZZ"]', true);  // "AAA" is lexicographically between "AA" and "ZZ"
+      expr('"ZZZ" in ["AA".."ZZ"]', false); // "ZZZ" > "ZZ"
+
+      // Multi-character string comparisons
+      expr('"1016AB" >= "1015CJ" and "1016AB" <= "1020ZZ"', true);
+      expr('"1015CJ" >= "1015CJ" and "1015CJ" <= "1020ZZ"', true);
+      expr('"1020ZZ" >= "1015CJ" and "1020ZZ" <= "1020ZZ"', true);
+      expr('"1014AA" >= "1015CJ" and "1014AA" <= "1020ZZ"', false);
+      expr('"1021AA" >= "1015CJ" and "1021AA" <= "1020ZZ"', false);
+
       expr('"d" in null', null);
 
       expr('5 in > 3', true);
