@@ -1,5 +1,5 @@
 {
-  "name": "feelin",
+  "name": "@bpmn-io/feelin",
   "version": "6.1.0",
   "description": "A FEEL parser and interpreter",
   "author": "Nico Rehwaldt <git_nikku@nixis.de>",
@@ -40,7 +40,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/nikku/feelin"
+    "url": "https://github.com/bpmn-io/feelin"
   },
   "engines": {
     "node": ">= 20.12.0"
