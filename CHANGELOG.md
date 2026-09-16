@@ -6,6 +6,10 @@ All notable changes to [@bpmn-io/feelin](https://github.com/bpmn-io/feelin) are 
 
 ___Note:__ Yet to be released changes appear here._
 
+## 6.1.1
+
+* `FIX`: prevent prototype access from FEEL expressions ([#174](https://github.com/nikku/feelin/pull/174))
+
 ## 6.1.0
 
 _Tracking upstream `feelin@6.1.0`._
