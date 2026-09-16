@@ -1,6 +1,6 @@
 {
   "name": "@bpmn-io/feelin",
-  "version": "6.1.0",
+  "version": "6.1.1",
   "description": "A FEEL parser and interpreter",
   "author": "Nico Rehwaldt <git_nikku@nixis.de>",
   "license": "MIT",
