@@ -6,6 +6,47 @@ All notable changes to [@bpmn-io/feelin](https://github.com/bpmn-io/feelin) are 
 
 ___Note:__ Yet to be released changes appear here._
 
+## 7.0.0
+
+_Tracking upstream `feelin@8.2.0`._
+
+* `FEAT`: migrate temporal handling from `luxon` to `Temporal` ([#146](https://github.com/nikku/feelin/issues/146), [#156](https://github.com/nikku/feelin/pull/156))
+* `FEAT`: support `time(..., offset)` ([#156](https://github.com/nikku/feelin/pull/156))
+* `FEAT`: support `abs()` of a duration ([#156](https://github.com/nikku/feelin/pull/156))
+* `FEAT`: support sub-minute zone offsets ([#156](https://github.com/nikku/feelin/pull/156))
+* `FEAT`: support duration type accessors, category-aware component access ([#44](https://github.com/nikku/feelin/issues/44), [#106](https://github.com/nikku/feelin/issues/106), [#156](https://github.com/nikku/feelin/pull/156))
+* `FEAT`: implement FEEL compliant `instance of` ([#7](https://github.com/nikku/feelin/issues/7), [#162](https://github.com/nikku/feelin/pull/162))
+* `FEAT`: validate built-in arguments, report misuse as warnings ([#161](https://github.com/nikku/feelin/pull/161))
+* `FEAT`: add `isRange` and `isFunction` type guards ([#157](https://github.com/nikku/feelin/pull/157))
+* `FEAT`: support `IterationContext` in `QuantifiedExpression` ([nikku/lezer-feel#79](https://github.com/nikku/lezer-feel/pull/79))
+* `FEAT`: mark external function definitions as unsupported ([#176](https://github.com/nikku/feelin/pull/176))
+* `PERF`: improve expression evaluation and built-in performance ([#177](https://github.com/nikku/feelin/pull/177))
+* `FIX`: treat `date`, `time` and `date and time` as incomparable ([#49](https://github.com/nikku/feelin/issues/49), [#165](https://github.com/nikku/feelin/pull/165))
+* `FIX`: reject week durations (unsupported in FEEL) ([#105](https://github.com/nikku/feelin/issues/105), [#163](https://github.com/nikku/feelin/pull/163))
+* `FIX`: reject mixed-kind duration arithmetic, keep days as days ([#106](https://github.com/nikku/feelin/issues/106), [#159](https://github.com/nikku/feelin/pull/159))
+* `FIX`: correctly handle missing required list argument ([#161](https://github.com/nikku/feelin/pull/161))
+* `FIX`: return `null` for `date(year, month, day, from)` ([#160](https://github.com/nikku/feelin/pull/160))
+* `FIX`: preserve falsy var-arg values ([#158](https://github.com/nikku/feelin/pull/158))
+* `FIX`: adjust for dots in parse tree
+* `FIX`: expose `weekday` property on `date` and `date and time` ([#175](https://github.com/nikku/feelin/pull/175))
+* `FIX`: require zone identity for strict temporal equality (`is`) ([#175](https://github.com/nikku/feelin/pull/175))
+* `FIX`: convert `time(date)` to the midnight (UTC) time ([#175](https://github.com/nikku/feelin/pull/175))
+* `FIX`: reject leap seconds in `time` literals ([#175](https://github.com/nikku/feelin/pull/175))
+* `FIX`: reject invalid zones and out-of-range offsets in `time` literals ([#175](https://github.com/nikku/feelin/pull/175))
+* `FIX`: reject malformed `duration` literals, warn on invalid input ([#175](https://github.com/nikku/feelin/pull/175))
+* `FIX`: treat incomparable scalars in membership tests as not equal ([#175](https://github.com/nikku/feelin/pull/175))
+* `FIX`: warn `INVALID_ARGUMENTS` on invalid `@"..."` temporal literals ([#177](https://github.com/nikku/feelin/pull/177))
+* `CHORE`: recognize `PathName` token
+* `DEPS`: update to `@bpmn-io/lezer-feel@3.0.1`
+* `DEPS`: update to `temporal-polyfill@1.0.4`
+* `DEPS`: update to `min-dash@5.1.0`
+
+### Breaking Changes
+
+* Date, time, and duration values returned from evaluation are now `FeelDate`, `FeelTime`, `FeelDateTime`, and `FeelDuration` instances backed by `Temporal`, replacing the previously returned `luxon` `DateTime`/`Duration` objects ([#146](https://github.com/nikku/feelin/issues/146), [#156](https://github.com/nikku/feelin/pull/156), [#157](https://github.com/nikku/feelin/pull/157)). Serialization via `JSON.stringify` is unchanged.
+* `Range` renamed to `FeelRange`, `FunctionWrapper` renamed to `FeelFunction`; both are now exported publicly ([#157](https://github.com/nikku/feelin/pull/157))
+* Week durations (`P1W`) and mixed-kind duration arithmetic (e.g. `months + days`) are now rejected instead of silently producing incorrect results ([#105](https://github.com/nikku/feelin/issues/105), [#106](https://github.com/nikku/feelin/issues/106), [#159](https://github.com/nikku/feelin/pull/159), [#163](https://github.com/nikku/feelin/pull/163))
+
 ## 6.1.1
 
 * `FIX`: prevent prototype access from FEEL expressions ([#174](https://github.com/nikku/feelin/pull/174))
@@ -31,6 +72,7 @@ _Tracking upstream `feelin@6.1.0`._
 * `FIX`: cannot access list item within an expression ([#127](https://github.com/nikku/feelin/issues/127), [#141](https://github.com/nikku/feelin/pull/141))
 * `FIX`: correct filter expression creating new variables ([#107](https://github.com/nikku/feelin/issues/107))
 * `FIX`: correct `round*` built-ins for out-of-range scale ([`fa0cc388`](https://github.com/nikku/feelin/pull/141/commits/fa0cc38819226a7e43dc740f666afcb28bc0808a))
+* `FIX`: correct filtering by variable names not covered by spec ([#18](https://github.com/nikku/feelin/issues/18))
 
 ## 6.0.0
 
