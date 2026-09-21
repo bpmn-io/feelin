@@ -604,6 +604,19 @@ function describeBuiltins(name, evaluate) {
       expr('is(@"2012-12-25", @"2012-12-25T00:00:00Z")', false);
       expr('is(@"2012-12-25", @"2012-12-25T00:00:00")', false);
 
+      // `is` requires zone identity: same instants expressed via different
+      // zones are not the same value (per DMN TCK 0103-feel-is-function)
+      expr('is(@"2002-04-02T12:00:00-01:00", @"2002-04-02T17:00:00+04:00")', false);
+      expr('is(@"2002-04-02T12:00:00-05:00", @"2002-04-02T23:00:00+06:00")', false);
+      expr('is(@"2002-04-02T23:00:00-04:00", @"2002-04-03T02:00:00-01:00")', false);
+      expr('is(@"2002-04-02T23:00:00@Australia/Melbourne", @"2002-04-02T23:00:00@Australia/Sydney")', false);
+      expr('is(@"2021-04-02T23:00:00@Australia/Melbourne", @"2021-04-02T23:00:00+11:00")', false);
+      expr('is(@"2021-10-02T23:00:00@Australia/Melbourne", @"2021-10-02T23:00:00+10:00")', false);
+      expr('is(@"23:00:50@Australia/Melbourne", @"23:00:50+10:00")', false);
+      expr('is(@"23:00:50@Etc/GMT", @"23:00:50Z")', false);
+      expr('is(@"23:00:50@Australia/Melbourne", @"23:00:50@Australia/Sydney")', false);
+      expr('is(@"20:00:50+00:00", @"21:00:50+01:00")', false);
+
       expr(`
         years and months duration(
           from:date("2016-01-21"),
@@ -695,6 +708,33 @@ function describeBuiltins(name, evaluate) {
       expr('duration("-P1W")', null);
       expr('@"P1W"', null);
 
+      // malformed duration literals are rejected
+      // (per DMN TCK 1120-feel-duration-function)
+      expr('duration("")', null);
+      expr('duration("2012T-12-2511:00:00Z")', null);
+      expr('duration("P0")', null);
+      expr('duration("1Y")', null);
+      expr('duration("1D")', null);
+      expr('duration("P1H")', null);
+      expr('duration("P1S")', null);
+
+      // time(date) is midnight UTC
+      // (per DMN TCK 1116-feel-time-function, 053)
+      expr('time(date("2017-08-10")) = time("00:00:00Z")', true);
+
+      // leap seconds are rejected
+      // (per DMN TCK 1116-feel-time-function, 057)
+      expr('time("23:59:60")', null);
+
+      // unknown zones are rejected
+      // (per DMN TCK 1116-feel-time-function, 066)
+      expr('time("13:20:00@xyz/abc")', null);
+
+      // out-of-range fixed offsets are rejected
+      expr('time("13:20:00+25:00")', null);
+      expr('time("13:20:00-25:00")', null);
+      expr('time("13:20:00+24:00:01")', null);
+
 
       describe('properties', function() {
 
@@ -712,6 +752,15 @@ function describeBuiltins(name, evaluate) {
 
         expr('time("10:30:00+05:00").time offset = duration("PT5H")', true);
         expr('date and time("2018-12-10T10:30:00+05:00").time offset = duration("PT5H")', true);
+
+        // per DMN TCK 0074-feel-properties
+        expr('date("2018-12-10").weekday', 1);
+        expr('date and time("2018-12-10T10:30:01").weekday', 1);
+
+        // `day of week` is a built-in function (returning the weekday
+        // name), not a date property (per DMN 10.3.4.1)
+        expr('date("2018-12-10").day of week', null);
+        expr('date and time("2018-12-10T10:30:01").day of week', null);
 
       });
 

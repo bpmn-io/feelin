@@ -53,9 +53,7 @@ export class FeelDate {
   get year() { return this.value.year; }
   get month() { return this.value.month; }
   get day() { return this.value.day; }
-  get 'day of year'() { return this.value.dayOfYear; }
-  get 'day of week'() { return this.value.dayOfWeek; }
-  get 'week of year'() { return this.value.weekOfYear; }
+  get weekday() { return this.value.dayOfWeek; }
 
   /**
    * Return the underlying `Temporal.PlainDate`.
@@ -179,9 +177,7 @@ export class FeelDateTime {
   get hour() { return this.value.hour; }
   get minute() { return this.value.minute; }
   get second() { return this.value.second; }
-  get 'day of year'() { return this.value.dayOfYear; }
-  get 'day of week'() { return this.value.dayOfWeek; }
-  get 'week of year'() { return this.value.weekOfYear; }
+  get weekday() { return this.value.dayOfWeek; }
   get timezone() { return this.zone; }
 
   get 'time offset'() {
@@ -400,6 +396,76 @@ function offsetZoneSeconds(zone: string | null) : number | null {
 }
 
 /**
+ * The offset, in seconds, of a fixed offset zone (`Z` / `UTC`,
+ * `+HH:MM` or `+HH:MM:SS`). Returns `null` for named (IANA) zones.
+ */
+function fixedOffsetSeconds(zone: string) : number | null {
+
+  if (zone === 'UTC') {
+    return 0;
+  }
+
+  const match = /^([+-])(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(zone);
+
+  if (!match) {
+    return null;
+  }
+
+  const sign = match[1] === '-' ? -1 : 1;
+
+  return sign * (Number(match[2]) * 3600 + Number(match[3]) * 60 + Number(match[4] ?? 0));
+}
+
+/**
+ * Whether a zone identifier is usable: a known (IANA) zone or a fixed
+ * offset within ±24h. Sub-minute offset zones are validated by range,
+ * as Temporal rejects them.
+ */
+function isValidZone(zone: string | null) : boolean {
+
+  if (zone === null) {
+    return true;
+  }
+
+  const offsetSeconds = offsetZoneSeconds(zone);
+
+  if (offsetSeconds !== null) {
+    return Math.abs(offsetSeconds) < 24 * 3600;
+  }
+
+  try {
+
+    // throws for an unknown zone
+    new Temporal.PlainDateTime(1970, 1, 1).toZonedDateTime(zone);
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether two zone identifiers denote the same zone, for the purpose of
+ * strict (`is`) equality: fixed offsets compare by offset (`Z` equals
+ * `+00:00`), named zones only by identifier.
+ */
+export function zoneEquals(a: string | null, b: string | null) : boolean {
+
+  if (a === null || b === null) {
+    return a === b;
+  }
+
+  const aOffset = fixedOffsetSeconds(a);
+  const bOffset = fixedOffsetSeconds(b);
+
+  if (aOffset !== null && bOffset !== null) {
+    return aOffset === bOffset;
+  }
+
+  return a === b;
+}
+
+/**
  * Resolve a zoned temporal to a concrete `Temporal.ZonedDateTime`,
  * anchoring zoned times to {@link REFERENCE_DATE}.
  */
@@ -539,20 +605,26 @@ export function durationEquals(a: FeelDuration, b: FeelDuration) : boolean {
   return Math.trunc(total(a, 'second') - total(b, 'second')) === 0;
 }
 
+// the FEEL duration grammar: `P[nY][nM][nD][T[nH][nM][nS]]` with at least
+// one component; notably the ISO-8601 week designator (`W`) is not part
+// of it (see #105)
+const DURATION_PATTERN = /^-?P(?=\d|T\d)(?:\d+Y)?(?:\d+M)?(?:\d+D)?(?:T(?=\d)(?:\d+H)?(?:\d+M)?(?:\d+(?:\.\d+)?S)?)?$/;
+
 export function duration(opts: string | number) : FeelDuration | null {
 
   if (typeof opts === 'number') {
     return new FeelDuration(Temporal.Duration.from({ milliseconds: opts }), false);
   }
 
-  // FEEL durations are years-and-months or days-and-time durations only;
-  // the ISO-8601 week designator (`W`) is not part of the FEEL grammar,
-  // even though the underlying temporal implementation would accept it
-  if (/\d+W/i.test(opts)) {
+  if (!DURATION_PATTERN.test(opts)) {
     return null;
   }
 
-  return new FeelDuration(Temporal.Duration.from(opts), isYearsMonthsString(opts));
+  try {
+    return new FeelDuration(Temporal.Duration.from(opts), isYearsMonthsString(opts));
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -703,6 +775,13 @@ export function timeOf(dateTime: FeelDateTime) : FeelTime {
 }
 
 /**
+ * The midnight (UTC) time of a date.
+ */
+export function timeOfDate(_date: FeelDate) : FeelTime {
+  return new FeelTime(new Temporal.PlainTime(0, 0, 0), 'UTC');
+}
+
+/**
  * Combine a date (or the date part of a date time) with a time into a
  * date time, carrying over the time's zone.
  */
@@ -818,7 +897,17 @@ export function parseTime(str: string) : FeelTime | null {
 
   const { value, zone } = splitZone(str);
 
+  // FEEL does not recognize leap seconds
+  if (/^\d{2}:\d{2}:60/.test(value)) {
+    return null;
+  }
+
   try {
+
+    if (!isValidZone(zone)) {
+      return null;
+    }
+
     return new FeelTime(Temporal.PlainTime.from(value), zone);
   } catch {
     return null;
@@ -845,19 +934,8 @@ export function parseDateTime(str: string) : FeelDateTime | null {
 
   try {
 
-    // validate the zone (throws for an unknown zone); sub-minute offset
-    // zones are validated by range, as Temporal rejects them
-    if (zone !== null) {
-
-      const offsetSeconds = offsetZoneSeconds(zone);
-
-      if (offsetSeconds !== null) {
-        if (Math.abs(offsetSeconds) >= 24 * 3600) {
-          return null;
-        }
-      } else {
-        new Temporal.PlainDateTime(1970, 1, 1).toZonedDateTime(zone);
-      }
+    if (!isValidZone(zone)) {
+      return null;
     }
 
     return new FeelDateTime(Temporal.PlainDateTime.from(value), zone);
