@@ -1,28 +1,50 @@
 import {
   isType,
   equals,
-  Range,
   isString,
   isNumber,
   getType,
-  typeCast
+  typeCast,
+  isDate,
+  isTime,
+  isDateTime,
+  isDuration
 } from './types.js';
+
+import {
+  before,
+  meets,
+  includes as includesRange
+} from './range.js';
+
+import {
+  invalidArguments,
+  isInvocationFailure,
+  parseParameterNames
+} from './function.js';
 
 import {
   getFromContext,
   has,
   isNotImplemented,
-  notImplemented,
-  parseParameterNames
+  notImplemented
 } from './utils.js';
 
 import {
   duration,
-  date,
-  isDateTime
+  parseDate,
+  parseTime,
+  parseDateTime,
+  now,
+  today,
+  dateFrom,
+  timeFrom,
+  dateOf,
+  timeOf,
+  combine,
+  yearsAndMonthsDuration,
+  absDuration
 } from './temporal.js';
-
-import { DateTime, Duration, SystemZone } from 'luxon';
 
 
 const names = [
@@ -143,6 +165,8 @@ const builtins = {
       return null;
     }
 
+    const original = from;
+
     if (groupingSeparator) {
       from = from.split(groupingSeparator).join('');
     }
@@ -154,7 +178,9 @@ const builtins = {
     const number = +from;
 
     if (isNaN(number)) {
-      return null;
+      return invalidArguments('number(from) expects a numeric string, got {from}', {
+        from: original
+      });
     }
 
     return number;
@@ -181,44 +207,51 @@ const builtins = {
     let d;
 
     if (isString(from)) {
-      d = date(from);
-    }
-
-    if (isDateTime(from)) {
+      d = parseDate(from);
+    } else if (isDate(from)) {
       d = from;
+    } else if (isDateTime(from)) {
+      d = dateOf(from);
     }
 
-    if (year) {
+    if (isNumber(year)) {
 
-      if (!isNumber(month) || !isNumber(day)) {
-        return null;
+      const error =
+        guard(from == null, 'date(year, month, day) does not accept a <from> argument') ||
+        guard(isNumber(month) && isNumber(day), 'date(year, month, day) expects <month> and <day> to be numbers');
+
+      if (error) {
+        return error;
       }
 
-      d = date().setZone('utc').set({
-        year,
-        month,
-        day
-      });
+      d = dateFrom(year, month, day);
+
+      if (!d) {
+        return invalidArguments('{year}, {month}, {day} is not a valid date', {
+          year,
+          month,
+          day
+        });
+      }
     }
 
-    return d && ifValid(d.setZone('utc').startOf('day')) || null;
+    if (d) {
+      return d;
+    }
+
+    return invalidArguments('date({from}) is not a valid date', { from });
   }, [ 'any?', 'number?', 'number?', 'any?' ], [ 'year', 'month', 'day', 'from' ]),
 
   // date and time(from) => date time string
   // date and time(date, time)
   'date and time': fn(function(d, time, from) {
 
+    const dateArg = d;
+
     let dt;
 
-    if (isDateTime(d) && isDateTime(time)) {
-
-      const dLocal = d.toLocal();
-
-      dt = time.set({
-        year: dLocal.year,
-        month: dLocal.month,
-        day: dLocal.day
-      });
+    if ((isDate(d) || isDateTime(d)) && isTime(time)) {
+      dt = combine(d, time);
     }
 
     if (isString(d)) {
@@ -227,10 +260,16 @@ const builtins = {
     }
 
     if (isString(from)) {
-      dt = date(from, null, from.includes('@') ? null : SystemZone.instance);
+      dt = parseDateTime(from);
     }
 
-    return dt && ifValid(dt) || null;
+    if (dt) {
+      return dt;
+    }
+
+    return invalidArguments('date and time({from}) is not a valid date time', {
+      from: isString(from) ? from : dateArg
+    });
   }, [ 'any?', 'time?', 'string?' ], [ 'date', 'time', 'from' ]),
 
   // time(from) => time string
@@ -240,55 +279,57 @@ const builtins = {
 
     let t;
 
-    if (offset) {
-      throw notImplemented('time(..., offset)');
-    }
-
-    if (isString(hour) || isDateTime(hour)) {
+    if (isString(hour) || isDate(hour) || isDateTime(hour) || isTime(hour)) {
       from = hour;
       hour = null;
     }
 
     if (isString(from) && from) {
-      t = date(null, from);
+      t = parseTime(from);
+    }
+
+    if (isTime(from)) {
+      t = from;
     }
 
     if (isDateTime(from)) {
-      t = from.set({
-        year: 1900,
-        month: 1,
-        day: 1
-      });
+      t = timeOf(from);
     }
 
     if (isNumber(hour)) {
 
-      if (!isNumber(minute) || !isNumber(second)) {
-        return null;
+      const error =
+        guard(isNumber(minute) && isNumber(second), 'time(hour, minute, second) expects <minute> and <second> to be numbers') ||
+        guard(offset == null || isDuration(offset), 'time(hour, minute, second, offset) expects <offset> to be a duration');
+
+      if (error) {
+        return error;
       }
 
-      // TODO: support offset = days and time duration
-      t = date().set({
-        hour,
-        minute,
-        second
-      }).set({
-        year: 1900,
-        month: 1,
-        day: 1,
-        millisecond: 0
-      });
+      t = timeFrom(hour, minute, second, offset);
+
+      if (!t) {
+        return invalidArguments('{hour}, {minute}, {second} is not a valid time', {
+          hour,
+          minute,
+          second
+        });
+      }
     }
 
-    return t && ifValid(t) || null;
+    if (t) {
+      return t;
+    }
+
+    return invalidArguments('time({from}) is not a valid time', { from: from ?? hour });
   }, [ 'any?', 'number?', 'number?', 'any?', 'any?' ], [ 'hour', 'minute', 'second', 'offset', 'from' ]),
 
   'duration': fn(function(from) {
-    return ifValid(duration(from));
+    return duration(from);
   }, [ 'string' ], [ 'from' ]),
 
   'years and months duration': fn(function(from, to) {
-    return ifValid(to.diff(from, [ 'years', 'months' ]));
+    return yearsAndMonthsDuration(from, to);
   }, [ 'date', 'date' ], [ 'from', 'to' ]),
 
   '@': fn(function(string) {
@@ -300,22 +341,26 @@ const builtins = {
     }
 
     else if (/^[\d]{1,2}:[\d]{1,2}:[\d]{1,2}/.test(string)) {
-      t = date(null, string);
+      t = parseTime(string);
+    }
+
+    else if (string.includes('T')) {
+      t = parseDateTime(string);
     }
 
     else {
-      t = date(string);
+      t = parseDate(string);
     }
 
-    return t && ifValid(t) || null;
+    return t || null;
   }, [ 'string' ]),
 
   'now': fn(function() {
-    return date();
+    return now();
   }, [], []),
 
   'today': fn(function() {
-    return date().startOf('day');
+    return today();
   }, [], []),
 
   // 10.3.4.2 Boolean function
@@ -374,7 +419,13 @@ const builtins = {
   'replace': fn(function(input, pattern, replacement, flags) {
     const regexp = createRegexp(pattern, flags || '', 'g');
 
-    return regexp && input.replace(regexp, replacement.replace(/\$0/g, '$$&'));
+    if (!regexp) {
+      return invalidArguments('replace(input, pattern, replacement) expects a valid pattern, got {pattern}', {
+        pattern
+      });
+    }
+
+    return input.replace(regexp, replacement.replace(/\$0/g, '$$&'));
   }, [ 'string', 'string', 'string', 'string?' ], [ 'input', 'pattern', 'replacement', 'flags' ]),
 
   'contains': fn(function(string, match) {
@@ -384,7 +435,13 @@ const builtins = {
   'matches': fn(function(input, pattern, flags) {
     const regexp = createRegexp(pattern, flags || '', '');
 
-    return regexp && regexp.test(input);
+    if (!regexp) {
+      return invalidArguments('matches(input, pattern) expects a valid pattern, got {pattern}', {
+        pattern
+      });
+    }
+
+    return regexp.test(input);
   }, [ 'string', 'string', 'string?' ], [ 'input', 'pattern', 'flags' ]),
 
   'starts with': fn(function(string, match) {
@@ -398,12 +455,23 @@ const builtins = {
   'split': fn(function(string, delimiter) {
     const regexp = createRegexp(delimiter, '', '');
 
-    return regexp && string.split(regexp);
+    if (!regexp) {
+      return invalidArguments('split(string, delimiter) expects a valid pattern, got {delimiter}', {
+        delimiter
+      });
+    }
+
+    return string.split(regexp);
   }, [ 'string', 'string' ], [ 'string', 'delimiter' ]),
 
   'string join': fn(function(list, delimiter) {
-    if (list.some(e => !isString(e) && e !== null)) {
-      return null;
+
+    const invalidItem = list.find(e => !isString(e) && e !== null);
+
+    if (invalidItem !== undefined) {
+      return invalidArguments('string join(list) expects a list of strings, got {item}', {
+        item: invalidItem
+      });
     }
 
     return list.filter(l => l !== null).join(delimiter || '');
@@ -422,7 +490,9 @@ const builtins = {
     const matcher = position || match;
 
     if (![ 'number', 'function' ].includes(getType(matcher))) {
-      return null;
+      return invalidArguments('list replace expects a numeric position or a match function, got {matcher}', {
+        matcher
+      });
     }
 
     return listReplace(list, position || match, newItem);
@@ -628,12 +698,22 @@ const builtins = {
 
   'abs': fn(function(n) {
 
-    if (typeof n !== 'number') {
+    if (isNumber(n)) {
+      return Math.abs(n);
+    }
+
+    if (isDuration(n)) {
+      return absDuration(n);
+    }
+
+    if (n === null) {
       return null;
     }
 
-    return Math.abs(n);
-  }, [ 'number' ], [ 'n' ]),
+    return invalidArguments('abs(n) expects a number or duration, got {n}', {
+      n
+    });
+  }, [ 'any' ], [ 'n' ]),
 
   'round up': fn(function(n, scale) {
     if (n === null || scale === null) return null;
@@ -666,7 +746,9 @@ const builtins = {
   'modulo': fn(function(dividend, divisor) {
 
     if (!divisor) {
-      return null;
+      return invalidArguments('modulo(dividend, divisor) does not accept {divisor} as a divisor', {
+        divisor
+      });
     }
 
     const adjust = 1000000000;
@@ -681,7 +763,9 @@ const builtins = {
   'sqrt': fn(function(number) {
 
     if (number < 0) {
-      return null;
+      return invalidArguments('sqrt(number) expects a non-negative number, got {number}', {
+        number
+      });
     }
 
     return Math.sqrt(number);
@@ -689,7 +773,9 @@ const builtins = {
 
   'log': fn(function(number) {
     if (number <= 0) {
-      return null;
+      return invalidArguments('log(number) expects a positive number, got {number}', {
+        number
+      });
     }
 
     return Math.log(number);
@@ -730,11 +816,11 @@ const builtins = {
   }, [ 'any', 'any' ], [ 'a', 'b' ]),
 
   'meets': fn(function(range1, range2) {
-    return meetsRange(range1, range2);
+    return meets(range1, range2);
   }, [ 'range', 'range' ], [ 'range1', 'range2' ]),
 
   'met by': fn(function(range1, range2) {
-    return meetsRange(range2, range1);
+    return meets(range2, range1);
   }, [ 'range', 'range' ], [ 'range1', 'range2' ]),
 
   'overlaps': fn(function(range1, range2) {
@@ -781,19 +867,19 @@ const builtins = {
   // 10.3.4.8 Temporal built-in functions
 
   'day of year': fn(function(date) {
-    return date.ordinal;
+    return date.value.dayOfYear;
   }, [ 'date time' ], [ 'date' ]),
 
   'day of week': fn(function(date) {
-    return date.weekdayLong;
+    return WEEKDAY_NAMES[date.value.dayOfWeek - 1];
   }, [ 'date time' ], [ 'date' ]),
 
   'month of year': fn(function(date) {
-    return date.monthLong;
+    return MONTH_NAMES[date.value.month - 1];
   }, [ 'date time' ], [ 'date' ]),
 
   'week of year': fn(function(date) {
-    return date.weekNumber;
+    return date.value.weekOfYear;
   }, [ 'date time' ], [ 'date' ]),
 
 
@@ -825,30 +911,30 @@ const builtins = {
   }, [ 'context' ], [ 'm' ]),
 
   'context': listFn(function(...entries) {
-    const context = entries.reduce((context, entry) => {
 
-      if (context === FALSE || ![ 'key', 'value' ].every(e => e in entry)) {
-        return FALSE;
+    const context = {};
+
+    for (const entry of entries) {
+
+      if (![ 'key', 'value' ].every(e => e in entry)) {
+        return invalidArguments('context(entries) expects each entry to have a key and value, got {entry}', {
+          entry
+        });
       }
 
       const key = entry.key;
 
       if (key === null) {
-        return FALSE;
+        return invalidArguments('context(entries) does not accept a null key');
       }
 
       if (has(context, key)) {
-        return FALSE;
+        return invalidArguments('context(entries) expects unique keys, got {key}', {
+          key
+        });
       }
 
-      return {
-        ...context,
-        [entry.key]: entry.value
-      };
-    }, {});
-
-    if (context === FALSE) {
-      return null;
+      context[key] = entry.value;
     }
 
     return context;
@@ -861,7 +947,7 @@ const builtins = {
   'context put': fn(function(context, keys, value, key) {
 
     if (typeof keys === 'undefined' && typeof key === 'undefined') {
-      return null;
+      return invalidArguments('context put(context, value) expects a key or keys');
     }
 
     return contextPut(context, keys || [ key ], value);
@@ -883,18 +969,22 @@ function contextPut(context, keys, value) {
   const [ key, ...remainingKeys ] = keys;
 
   if (getType(key) !== 'string') {
-    return null;
+    return invalidArguments('context put expects a string key, got {key}', {
+      key
+    });
   }
 
   if (getType(context) === 'nil') {
-    return null;
+    return invalidArguments('context put expects an existing context, got {context}', {
+      context
+    });
   }
 
   if (remainingKeys.length) {
     value = contextPut(context[key], remainingKeys, value);
 
-    if (value === null) {
-      return null;
+    if (isInvocationFailure(value)) {
+      return value;
     }
   }
 
@@ -922,6 +1012,10 @@ function createArgTester(arg) {
     if (type === 'list') {
       if (arr || optional && typeof obj === 'undefined') {
         return obj;
+      } else if (typeof obj === 'undefined') {
+
+        // reject a missing required list argument
+        return FALSE;
       } else {
 
         // implicit conversion obj => [ obj ]
@@ -1016,6 +1110,21 @@ function listFn(fnDefinition, type, parameterNames = null) {
 }
 
 /**
+ * Return an {@link invalidArguments} signal unless the condition holds,
+ * so builtins can express argument validation as a flat guard chain
+ * (`guard(...) || guard(...)`), short-circuiting on the first failure.
+ *
+ * @param {boolean} condition
+ * @param {string} template
+ * @param {Record<string, unknown>} [values]
+ *
+ * @return {import('./function.js').InvocationFailure | null}
+ */
+function guard(condition, template, values = {}) {
+  return condition ? null : invalidArguments(template, values);
+}
+
+/**
  * @param {Function} fnDefinition
  * @param {string[]} argDefinitions
  * @param {string[]} [parameterNames]
@@ -1023,7 +1132,6 @@ function listFn(fnDefinition, type, parameterNames = null) {
  * @return {Function}
  */
 function fn(fnDefinition, argDefinitions, parameterNames = null) {
-
   const checkArgs = createArgsValidator(argDefinitions);
 
   parameterNames = parameterNames || parseParameterNames(fnDefinition);
@@ -1042,96 +1150,6 @@ function fn(fnDefinition, argDefinitions, parameterNames = null) {
   wrappedFn.$args = parameterNames;
 
   return wrappedFn;
-}
-
-/**
- * @param {Range} a
- * @param {Range} b
- */
-function meetsRange(a, b) {
-  return [
-    (a.end === b.start),
-    (a['end included'] === true),
-    (b['start included'] === true)
-  ].every(v => v);
-}
-
-/**
- * @param {Range|number} a
- * @param {Range|number} b
- */
-function before(a, b) {
-  if (a instanceof Range && b instanceof Range) {
-    return (
-      a.end < b.start || (
-        !a['end included'] || !b['start included']
-      ) && a.end == b.start
-    );
-  }
-
-  if (a instanceof Range) {
-    return (
-      a.end < b || (
-        !a['end included'] && a.end === b
-      )
-    );
-  }
-
-  if (b instanceof Range) {
-    return (
-      b.start > a || (
-        !b['start included'] && b.start === a
-      )
-    );
-  }
-
-  return a < b;
-}
-
-/**
- * @param {Range} container - The range that should contain the other value
- * @param {Range|number} value - The range or point to check if contained
- */
-function includesRange(container, value) {
-  if (!(container instanceof Range)) {
-    return false;
-  }
-
-  // Range includes another range
-  if (value instanceof Range) {
-    const startOk = (
-      container.start < value.start ||
-      (
-        container.start === value.start &&
-        (container['start included'] || !value['start included'])
-      )
-    );
-
-    // Check end boundary: container.end >= value.end
-    const endOk = (
-      container.end > value.end ||
-      (
-        container.end === value.end &&
-        (container['end included'] || !value['end included'])
-      )
-    );
-
-    return startOk && endOk;
-  }
-
-  // Range includes a point
-  // Check if point is within [start, end] considering inclusive/exclusive
-  const afterStart = (
-    value > container.start ||
-    (value === container.start && container['start included'])
-  );
-
-  const beforeEnd = (
-    value < container.end ||
-    (value === container.end && container['end included'])
-  );
-
-  return afterStart && beforeEnd;
 }
 
 function sum(list) {
@@ -1189,23 +1207,15 @@ function toString(obj, wrap = false) {
   }
 
   if (type === 'duration') {
-    return obj.shiftTo('years', 'months', 'days', 'hours', 'minutes', 'seconds').normalize().toISO();
+    return obj.toString();
   }
 
   if (type === 'date time') {
-    if (obj.zone === SystemZone.instance) {
-      return obj.toISO({ suppressMilliseconds: true, includeOffset: false });
-    }
-
-    if (obj.zone?.zoneName) {
-      return obj.toISO({ suppressMilliseconds: true, includeOffset: false }) + '@' + obj.zone?.zoneName;
-    }
-
-    return obj.toISO({ suppressMilliseconds: true });
+    return obj.toString();
   }
 
   if (type === 'date') {
-    return obj.toISODate();
+    return obj.toString();
   }
 
   if (type === 'range') {
@@ -1213,15 +1223,7 @@ function toString(obj, wrap = false) {
   }
 
   if (type === 'time') {
-    if (obj.zone === SystemZone.instance) {
-      return obj.toISOTime({ suppressMilliseconds: true, includeOffset: false });
-    }
-
-    if (obj.zone?.zoneName) {
-      return obj.toISOTime({ suppressMilliseconds: true, includeOffset: false }) + '@' + obj.zone?.zoneName;
-    }
-
-    return obj.toISOTime({ suppressMilliseconds: true });
+    return obj.toString();
   }
 
   if (type === 'function') {
@@ -1318,9 +1320,14 @@ function mode(array: number[]) {
   return sorted.filter(s => s[1] === sorted[0][1]).map(e => +e[0]);
 }
 
-function ifValid<T extends DateTime | Duration>(o: T) : T | null {
-  return o.isValid ? o : null;
-}
+const WEEKDAY_NAMES = [
+  'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'
+];
+
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'
+];
 
 /**
  * Concatenates flags for a regular expression.

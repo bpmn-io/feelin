@@ -5,23 +5,26 @@ import { builtins } from './builtins.js';
 import { has } from 'min-dash';
 
 import {
-  Range,
-  FunctionWrapper,
-  FUNCTION_PARAMETER_MISSMATCH,
   equals,
   isArray,
   getType,
   isDuration,
-  isDateTime,
-  isType,
   isNumber,
   isContext,
   isBoolean
 } from './types.js';
 
 import {
-  notImplemented,
-  parseParameterNames,
+  isRange,
+  createRange
+} from './range.js';
+
+import {
+  isInvocationFailure,
+  wrapFunction
+} from './function.js';
+
+import {
   getFromContext
 } from './utils.js';
 
@@ -30,7 +33,13 @@ import {
   parseUnaryTests
 } from './parser.js';
 
-import { Duration } from 'luxon';
+import {
+  isTemporal,
+  addDuration,
+  subtractTemporals,
+  addDurations,
+  toFeel
+} from './temporal.js';
 
 
 export type WarningType =
@@ -39,6 +48,7 @@ export type WarningType =
   | 'NO_PROPERTY_FOUND'
   | 'NOT_COMPARABLE'
   | 'INVALID_TYPE'
+  | 'INVALID_ARGUMENTS'
   | 'NO_FUNCTION_FOUND'
   | 'FUNCTION_INVOCATION_FAILURE';
 
@@ -247,6 +257,8 @@ export function unaryTest(
 
   const interpreterContext = new InterpreterContext();
 
+  evalContext = coerceContext(evalContext);
+
   const value = evalContext['?'] !== undefined ? evalContext['?'] : null;
 
   const {
@@ -272,6 +284,8 @@ export function evaluate(
 
   const interpreterContext = new InterpreterContext();
 
+  evalContext = coerceContext(evalContext);
+
   const {
     root
   } = interpreter.evaluate(expression, evalContext, dialect, interpreterContext);
@@ -286,12 +300,58 @@ export function evaluate(
   };
 }
 
+/**
+ * Deep-coerce raw Temporal and JS Date values in a user context into
+ * FEEL-native wrapper values, so that consumers may pass either flavor.
+ */
+function coerceContext(value) {
+
+  if (isArray(value)) {
+    return value.map(coerceContext);
+  }
+
+  if (isContext(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([ key, entry ]) => [ key, coerceContext(entry) ])
+    );
+  }
+
+  return toFeel(value);
+}
+
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function evalNode(node: Node, args: any[], interpreterContext: InterpreterContext) {
 
+  // resolve a raw function invocation result: emit the appropriate
+  // warning for a failure signal and normalise it to `null`, so the
+  // signal never leaks into an enclosing expression
+  const resolveInvocation = (result) => {
+
+    if (isInvocationFailure(result)) {
+      interpreterContext.addWarning(node, result.warning as WarningType, {
+        template: result.template,
+        values: result.values
+      });
+
+      return null;
+    }
+
+    return result;
+  };
+
   switch (node.name) {
   case 'ArithOp': return (context) => {
+
+    const invalidType = (opName, left, right) => {
+      interpreterContext.addWarning(node, 'INVALID_TYPE', {
+        template: `Can't ${opName} {right} to {left}`,
+        values: {
+          left,
+          right
+        }
+      });
+    };
 
     const nullable = (op, opName, types = [ 'number' ]) => (a, b) => {
 
@@ -299,13 +359,7 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
       const right = b(context);
 
       if (isArray(left) || isArray(right)) {
-        interpreterContext.addWarning(node, 'INVALID_TYPE', {
-          template: `Can't ${opName} {right} to {left}`,
-          values: {
-            left,
-            right
-          }
-        });
+        invalidType(opName, left, right);
 
         return null;
       }
@@ -317,24 +371,12 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
 
       if (temporal.includes(leftType)) {
         if (!temporal.includes(rightType)) {
-          interpreterContext.addWarning(node, 'INVALID_TYPE', {
-            template: `Can't ${opName} {right} to {left}`,
-            values: {
-              left,
-              right
-            }
-          });
+          invalidType(opName, left, right);
 
           return null;
         }
       } else if (leftType !== rightType || !types.includes(leftType)) {
-        interpreterContext.addWarning(node, 'INVALID_TYPE', {
-          template: `Can't ${opName} {right} to {left}`,
-          values: {
-            left,
-            right
-          }
-        });
+        invalidType(opName, left, right);
 
         return null;
       }
@@ -345,42 +387,42 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
     switch (node.input) {
     case '+': return nullable((a, b) => {
 
-      // flip these as luxon operations with durations aren't commutative
+      // flip these as temporal + duration operations aren't commutative
       if (isDuration(a) && !isDuration(b)) {
         const tmp = a;
         a = b;
         b = tmp;
       }
 
-      if (isType(a, 'time') && isDuration(b)) {
-        return a.plus(b).set({
-          year: 1900,
-          month: 1,
-          day: 1
-        });
-      } else if (isDateTime(a) && isDateTime(b)) {
+      if (isTemporal(a) && isDuration(b)) {
+        return addDuration(a, b, 1);
+      } else if (isTemporal(a) && isTemporal(b)) {
         return null;
-      } else if (isDateTime(a) && isDuration(b)) {
-        return a.plus(b);
       } else if (isDuration(a) && isDuration(b)) {
-        return a.plus(b);
+        const result = addDurations(a, b, 1);
+
+        if (result === null) {
+          invalidType('add', a, b);
+        }
+
+        return result;
       }
 
       return a + b;
     }, 'add', [ 'string', 'number', 'date', 'time', 'duration', 'date time' ]);
     case '-': return nullable((a, b) => {
-      if (isType(a, 'time') && isDuration(b)) {
-        return a.minus(b).set({
-          year: 1900,
-          month: 1,
-          day: 1
-        });
-      } else if (isDateTime(a) && isDateTime(b)) {
-        return a.diff(b);
-      } else if (isDateTime(a) && isDuration(b)) {
-        return a.minus(b);
+      if (isTemporal(a) && isDuration(b)) {
+        return addDuration(a, b, -1);
+      } else if (isTemporal(a) && isTemporal(b)) {
+        return subtractTemporals(a, b);
       } else if (isDuration(a) && isDuration(b)) {
-        return a.minus(b);
+        const result = addDurations(a, b, -1);
+
+        if (result === null) {
+          invalidType('subtract', a, b);
+        }
+
+        return result;
       }
 
       return a - b;
@@ -400,7 +442,10 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
     case '<': return (b) => createRange(null, b, false, false);
     case '<=': return (b) => createRange(null, b, false, true);
     case '=': return (b) => (a) => equals(a, b);
-    case '!=': return (b) => (a) => !equals(a, b);
+    case '!=': return (b) => (a) => {
+      const result = equals(a, b);
+      return result === null ? null : !result;
+    };
     }
 
   }, 'test');
@@ -570,8 +615,17 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
     return null;
   }, 'any');
 
-  case 'QualifiedName': return (context) => {
-    return args.reduce((context, arg) => arg(context), context);
+
+  case 'QualifiedName': return {
+    kind: 'name',
+    name: normalizeTypeName(node.input),
+
+    // fall back to a user-provided constructor / value resolved from
+    // context, preserving the historic `x instance of SomeClass` behavior
+    resolve: (context) => args.reduce(
+      (context, arg) => typeof arg === 'function' ? arg(context) : context,
+      context
+    )
   };
 
   case '?': return (context) => getFromContext('?', context);
@@ -670,14 +724,39 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
     return extractValue(context, args[0], args[2]);
   };
 
-  case 'SpecialType': throw notImplemented('SpecialType');
+  case 'SpecialType': return {
+    kind: 'name',
+    name: normalizeTypeName(node.input)
+  };
+
+  case 'ListType': return {
+    kind: 'list',
+    element: args.find(isTypeDescriptor)
+  };
+
+  case 'ContextType': return {
+    kind: 'context',
+    entries: args.find(Array.isArray) || []
+  };
+
+  case 'ContextEntryTypes': return args.filter(
+    arg => arg && arg.name
+  );
+
+  case 'ContextEntryType': return {
+    name: args[0],
+    type: args.find(isTypeDescriptor)
+  };
+
+  case 'FunctionType': return {
+    kind: 'function'
+  };
 
   case 'InstanceOfExpression': return tag((context) => {
 
-    const a = args[0](context);
-    const b = args[3](context);
+    const value = args[0](context);
 
-    return a instanceof b;
+    return matchesType(value, args[3], context);
   }, 'test');
 
   case 'every': return tag((context) => {
@@ -760,19 +839,7 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
 
       const result = wrappedFn.invoke(contextOrArgs);
 
-      if (result === FUNCTION_PARAMETER_MISSMATCH) {
-        interpreterContext.addWarning(node, 'FUNCTION_INVOCATION_FAILURE', {
-          template: 'Cannot invoke {target} with parameters {params}',
-          values: {
-            target: wrappedFn,
-            params: contextOrArgs
-          }
-        });
-
-        return null;
-      }
-
-      return result;
+      return resolveInvocation(result);
     }
 
   }, 'date');
@@ -814,19 +881,7 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
 
     const result = wrappedFn.invoke(contextOrArgs);
 
-    if (result === FUNCTION_PARAMETER_MISSMATCH) {
-      interpreterContext.addWarning(node, 'FUNCTION_INVOCATION_FAILURE', {
-        template: 'Cannot invoke {target} with parameters {params}',
-        values: {
-          target: wrappedFn,
-          params: contextOrArgs
-        }
-      });
-
-      return null;
-    }
-
-    return result;
+    return resolveInvocation(result);
   }, 'any');
 
   case 'IfExpression': return (function() {
@@ -1042,7 +1097,7 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
           result = result(el);
         }
 
-        if (result instanceof Range) {
+        if (isRange(result)) {
           result = result.includes(el);
         }
 
@@ -1152,9 +1207,23 @@ function compareIn(value, tests) {
     tests = [ tests ];
   }
 
-  return tests.some(
-    test => compareValue(test, value)
-  );
+  // three-valued membership: a matching test wins, otherwise any
+  // incomparable (null) test makes the whole result unknown (null)
+  let unknown = false;
+
+  for (const test of tests) {
+    const result = compareValue(test, value);
+
+    if (result === true) {
+      return true;
+    }
+
+    if (result === null) {
+      unknown = true;
+    }
+  }
+
+  return unknown ? null : false;
 }
 
 function compareValue(test, value) {
@@ -1163,254 +1232,11 @@ function compareValue(test, value) {
     return test(value);
   }
 
-  if (test instanceof Range) {
+  if (isRange(test)) {
     return test.includes(value);
   }
 
   return equals(test, value);
-}
-
-
-const chars = Array.from(
-  'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
-);
-
-function isTyped(type, values) {
-  return (
-    values.some(e => getType(e) === type) &&
-    values.every(e => e === null || getType(e) === type)
-  );
-}
-
-const nullRange = new Range({
-  start: null,
-  end: null,
-  'start included': false,
-  'end included': false,
-  map() {
-    return [];
-  },
-  includes() {
-    return null;
-  }
-});
-
-function createRange(start, end, startIncluded = true, endIncluded = true) : Range {
-
-  if (isTyped('string', [ start, end ])) {
-    return createStringRange(start, end, startIncluded, endIncluded);
-  }
-
-  if (isTyped('number', [ start, end ])) {
-    return createNumberRange(start, end, startIncluded, endIncluded);
-  }
-
-  if (isTyped('duration', [ start, end ])) {
-    return createDurationRange(start, end, startIncluded, endIncluded);
-  }
-
-  if (isTyped('time', [ start, end ])) {
-    return createDateTimeRange(start, end, startIncluded, endIncluded);
-  }
-
-  if (isTyped('date time', [ start, end ])) {
-    return createDateTimeRange(start, end, startIncluded, endIncluded);
-  }
-
-  if (isTyped('date', [ start, end ])) {
-    return createDateTimeRange(start, end, startIncluded, endIncluded);
-  }
-
-  if (start === null && end === null) {
-    return nullRange;
-  }
-
-  throw new Error(`unsupported range: ${start}..${end}`);
-}
-
-function noopMap() {
-  return () => {
-    throw new Error('unsupported range operation: map');
-  };
-}
-
-function valuesMap(values) {
-  return (fn) => values.map(fn);
-}
-
-function valuesIncludes(values) {
-  return (value) => values.includes(value);
-}
-
-function numberMap(start, end, startIncluded, endIncluded) {
-
-  const direction = start > end ? -1 : 1;
-
-  return (fn) => {
-
-    const result = [];
-
-    for (let i = start;; i += direction) {
-
-      if (i === 0 && !startIncluded) {
-        continue;
-      }
-
-      if (i === end && !endIncluded) {
-        break;
-      }
-
-      result.push(fn(i));
-
-      if (i === end) {
-        break;
-      }
-    }
-
-    return result;
-  };
-}
-
-function includesStart(n, inclusive) {
-
-  if (inclusive) {
-    return (value) => n <= value;
-  } else {
-    return (value) => n < value;
-  }
-}
-
-function includesEnd(n, inclusive) {
-
-  if (inclusive) {
-    return (value) => n >= value;
-  } else {
-    return (value) => n > value;
-  }
-}
-
-function anyIncludes(start, end, startIncluded, endIncluded, conversion = (v) => v) {
-
-  let tests = [];
-
-  if (start === null && end === null) {
-    return () => null;
-  }
-
-  if (start !== null && end !== null) {
-    if (start > end) {
-      tests = [
-        includesStart(end, endIncluded),
-        includesEnd(start, startIncluded)
-      ];
-    } else {
-      tests = [
-        includesStart(start, startIncluded),
-        includesEnd(end, endIncluded)
-      ];
-    }
-  } else if (end !== null) {
-    tests = [
-      includesEnd(end, endIncluded)
-    ];
-  } else if (start !== null) {
-    tests = [
-      includesStart(start, startIncluded)
-    ];
-  }
-
-  return (value) => value === null ? null : tests.every(t => t(conversion(value)));
-}
-
-function createStringRange(start, end, startIncluded = true, endIncluded = true) {
-
-  const singleStartChar = start !== null && chars.includes(start);
-  const singleEndChar = end !== null && chars.includes(end);
-
-  let values;
-
-  if (singleStartChar && singleEndChar) {
-
-    let startIdx = chars.indexOf(start);
-    let endIdx = chars.indexOf(end);
-
-    const direction = startIdx > endIdx ? -1 : 1;
-
-    if (startIncluded === false) {
-      startIdx += direction;
-    }
-
-    if (endIncluded === false) {
-      endIdx -= direction;
-    }
-
-    values = chars.slice(startIdx, endIdx + 1);
-  }
-
-  const map = values ? valuesMap(values) : noopMap();
-  const includes = values ? valuesIncludes(values) : anyIncludes(start, end, startIncluded, endIncluded);
-
-  return new Range({
-    start,
-    end,
-    'start included': startIncluded,
-    'end included': endIncluded,
-    map,
-    includes
-  });
-}
-
-function createNumberRange(start, end, startIncluded, endIncluded) {
-  const map = start !== null && end !== null ? numberMap(start, end, startIncluded, endIncluded) : noopMap();
-  const includes = anyIncludes(start, end, startIncluded, endIncluded);
-
-  return new Range({
-    start,
-    end,
-    'start included': startIncluded,
-    'end included': endIncluded,
-    map,
-    includes
-  });
-}
-
-/**
- * @param {Duration} start
- * @param {Duration} end
- * @param {boolean} startIncluded
- * @param {boolean} endIncluded
- */
-function createDurationRange(start, end, startIncluded, endIncluded) {
-
-  const toMillis = (d) => d ? Duration.fromDurationLike(d).toMillis() : null;
-
-  const map = noopMap();
-  const includes = anyIncludes(toMillis(start), toMillis(end), startIncluded, endIncluded, toMillis);
-
-  return new Range({
-    start,
-    end,
-    'start included': startIncluded,
-    'end included': endIncluded,
-    map,
-    includes
-  });
-
-}
-
-
-function createDateTimeRange(start, end, startIncluded, endIncluded) {
-  const map = noopMap();
-  const includes = anyIncludes(start, end, startIncluded, endIncluded);
-
-  return new Range({
-    start,
-    end,
-    'start included': startIncluded,
-    'end included': endIncluded,
-    map,
-    includes
-  });
 }
 
 
@@ -1446,31 +1272,92 @@ function isTruthy(obj) {
   return obj !== false && obj !== null;
 }
 
+
+// instance of //////////////////////////////////////////////////////
+
 /**
- * @param {Function} fn
- * @param {string[]} [parameterNames]
+ * A parsed FEEL type, as it appears on the right-hand side of an
+ * `instance of` expression.
  *
- * @return {FunctionWrapper}
+ * @typedef {(
+ *   { kind: 'name', name: string, resolve?: (context) => any } |
+ *   { kind: 'list', element: TypeDescriptor } |
+ *   { kind: 'context', entries: { name: string, type: TypeDescriptor }[] } |
+ *   { kind: 'function' }
+ * )} TypeDescriptor
  */
-function wrapFunction(fn, parameterNames = null) {
 
-  if (!fn) {
-    return null;
+const anyType = (value) => getType(value) !== 'nil';
+
+/**
+ * Predicates for the named FEEL types, all built on the {@link getType}
+ * oracle (the single source of truth for type identity). The two duration
+ * variants additionally inspect the duration's kind.
+ */
+const NAMED_TYPE_CHECKS = {
+  'Any': anyType,
+  'Null': (value) => value === null,
+  'number': (value) => getType(value) === 'number',
+  'string': (value) => getType(value) === 'string',
+  'boolean': (value) => getType(value) === 'boolean',
+  'date': (value) => getType(value) === 'date',
+  'time': (value) => getType(value) === 'time',
+  'date and time': (value) => getType(value) === 'date time',
+  'duration': (value) => getType(value) === 'duration',
+  'days and time duration': (value) => isDuration(value) && !value.yearsMonths,
+  'years and months duration': (value) => isDuration(value) && value.yearsMonths,
+  'context': (value) => getType(value) === 'context',
+  'list': (value) => getType(value) === 'list',
+  'range': (value) => getType(value) === 'range',
+  'function': (value) => getType(value) === 'function'
+};
+
+function normalizeTypeName(name: string) : string {
+  return name.replace(/\s+/g, ' ').trim();
+}
+
+function isTypeDescriptor(obj) : boolean {
+  return obj && typeof obj === 'object' && typeof obj.kind === 'string';
+}
+
+/**
+ * Whether `value` is an instance of the given FEEL type, per the DMN
+ * `instance of` operator. Composite types (`list<T>`, `context<...>`) are
+ * matched structurally; named types delegate to {@link getType}, and an
+ * unknown name falls back to a JavaScript constructor resolved from the
+ * evaluation context.
+ */
+function matchesType(value, descriptor, context) : boolean {
+
+  if (!isTypeDescriptor(descriptor)) {
+    return false;
   }
 
-  if (fn instanceof FunctionWrapper) {
-    return fn;
+  switch (descriptor.kind) {
+  case 'name': {
+    const check = NAMED_TYPE_CHECKS[descriptor.name];
+
+    if (check) {
+      return check(value);
+    }
+
+    const target = descriptor.resolve ? descriptor.resolve(context) : null;
+
+    return typeof target === 'function' && value instanceof target;
+  }
+  case 'list':
+    return getType(value) === 'list' && value.every(
+      element => matchesType(element, descriptor.element, context)
+    );
+  case 'context':
+    return getType(value) === 'context' && descriptor.entries.every(
+      ({ name, type }) => has(value, name) && matchesType(value[name], type, context)
+    );
+  case 'function':
+    return getType(value) === 'function';
   }
 
-  if (fn instanceof Range) {
-    return new FunctionWrapper((value) => fn.includes(value), [ 'value' ]);
-  }
-
-  if (typeof fn !== 'function') {
-    return null;
-  }
-
-  return new FunctionWrapper(fn, parameterNames || parseParameterNames(fn));
+  return false;
 }
 
 function parseString(str: string) {

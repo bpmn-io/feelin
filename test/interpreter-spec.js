@@ -6,11 +6,51 @@ import {
   unaryTest,
   evaluate,
   date,
-  duration
+  duration,
+  FeelRange,
+  FeelFunction,
+  isRange,
+  isFunction
 } from '@bpmn-io/feelin';
 
 
 describe('interpreter', function() {
+
+  describe('public API', function() {
+
+    it('should expose wrapper classes', function() {
+      expect(FeelRange).to.be.a('function');
+      expect(FeelFunction).to.be.a('function');
+    });
+
+
+    it('should return wrapper values from evaluate', function() {
+      expect(evaluate('[1..10]').value).to.be.an.instanceof(FeelRange);
+      expect(evaluate('function(x) x + 1').value).to.be.an.instanceof(FeelFunction);
+    });
+
+
+    it('should expose <isRange> guard', function() {
+      expect(isRange).to.be.a('function');
+
+      expect(isRange(evaluate('[1..10]').value)).to.be.true;
+      expect(isRange(evaluate('function(x) x + 1').value)).to.be.false;
+      expect(isRange(5)).to.be.false;
+      expect(isRange(null)).to.be.false;
+    });
+
+
+    it('should expose <isFunction> guard', function() {
+      expect(isFunction).to.be.a('function');
+
+      expect(isFunction(evaluate('function(x) x + 1').value)).to.be.true;
+      expect(isFunction(evaluate('[1..10]').value)).to.be.false;
+      expect(isFunction(5)).to.be.false;
+      expect(isFunction(null)).to.be.false;
+    });
+
+  });
+
 
   describe('evaluate', function() {
 
@@ -88,8 +128,12 @@ describe('interpreter', function() {
         expr('time("23:59:00") + duration("PT2M") + duration("P1D") = time("00:01")', true);
         expr('time("23:59:00") + duration("PT2M") + duration("P1M") = time("00:01")', true);
 
-        // TODO(nikku): figure out semantics in accordance with DMN spec
-        exprSkip('time("00:01:00@Etc/UTC") - time("23:59:00z") = duration("PT2M")', true);
+        // time subtraction yields a signed days-and-time duration (mirroring
+        // camunda/feel-scala); zoned times subtract as instants
+        expr('string(time("10:30:00") - time("09:00:00"))', 'PT1H30M');
+        expr('string(time("09:00:00") - time("10:00:00"))', '-PT1H');
+        expr('string(time("12:00:00+01:00") - time("10:00:00+01:00"))', 'PT2H');
+        expr('time("00:01:00@Etc/UTC") - time("23:59:00z") = duration("-PT23H58M")', true);
 
         expr(`
           time("23:59:00z") + duration("PT2M") =
@@ -122,14 +166,33 @@ describe('interpreter', function() {
         expr('duration("P1D") + duration("P1D")', duration('P2D'));
         expr('duration("PT1M") + duration("PT1M")', duration('PT2M'));
 
+        // days / time durations add as 24h day units, without balancing
+        // into calendar months (P20D + P20D = P40D, not P1M9D)
+        expr('duration("P20D") + duration("P20D")', duration('P40D'));
+        expr('duration("P25D") + duration("P10D")', duration('P35D'));
+
+        // years / months durations add independently of any calendar
+        expr('duration("P1Y") + duration("P2M") = duration("P1Y2M")', true);
+        expr('duration("P1Y2M") - duration("P6M") = duration("P8M")', true);
+        expr('duration("P18M") + duration("P0M") = duration("P1Y6M")', true);
+        expr('string(duration("P1Y") + duration("P2M"))', 'P1Y2M');
+
+        // years / months and days / time durations are distinct FEEL types;
+        // combining the two kinds is undefined and yields null (mirrors
+        // camunda/feel-scala, which has no mixed-kind arithmetic case)
+        expr('duration("P1Y") + duration("P1D")', null);
+        expr('duration("P1D") + duration("P1Y")', null);
+        expr('duration("P1Y") - duration("P1D")', null);
+        expr('duration("P0Y") + duration("P0D")', null);
+
         expr('date("2023-10-06") + duration("PT1H")', date('2023-10-06T01:00Z'));
         expr('date("2023-10-06") + duration("P1D")', date('2023-10-07'));
-        expr('date("2023-10-06") + duration("P1W")', date('2023-10-13'));
+        expr('date("2023-10-06") + duration("P7D")', date('2023-10-13'));
         expr('date("2023-10-06") + duration("P1M")', date('2023-11-06'));
         expr('date("2023-10-06") + duration("P1Y")', date('2024-10-06'));
         expr('date("2023-10-06") - duration("PT1H")', date('2023-10-05T23:00Z'));
         expr('date("2023-10-06") - duration("P1D")', date('2023-10-05'));
-        expr('date("2023-10-06") - duration("P1W")', date('2023-09-29'));
+        expr('date("2023-10-06") - duration("P7D")', date('2023-09-29'));
         expr('date("2023-10-06") - duration("P1M")', date('2023-09-06'));
         expr('date("2023-10-06") - duration("P1Y")', date('2022-10-06'));
         expr('date("2023-10-06") + duration("P1M") = date("2023-11-06")', true);
@@ -252,6 +315,24 @@ describe('interpreter', function() {
       });
 
       expr('foo(varArgs: 1)', [ [ 1 ] ], {
+        foo: function(...varArgs) {
+          return [ varArgs ];
+        }
+      });
+
+      expr('foo(varArgs: 0)', [ [ 0 ] ], {
+        foo: function(...varArgs) {
+          return [ varArgs ];
+        }
+      });
+
+      expr('foo(varArgs: false)', [ [ false ] ], {
+        foo: function(...varArgs) {
+          return [ varArgs ];
+        }
+      });
+
+      expr('foo(varArgs: "")', [ [ '' ] ], {
         foo: function(...varArgs) {
           return [ varArgs ];
         }
@@ -555,6 +636,45 @@ describe('interpreter', function() {
     });
 
 
+    // https://github.com/nikku/feelin/issues/49
+    describe('Comparison > incompatible temporal types', function() {
+
+      // `date`, `time` and `date and time` are distinct FEEL types; a value
+      // of one type is never comparable to a value of another, so any such
+      // comparison is `null` (equality/relational) rather than true/false
+
+      // date <-> date and time
+      expr('date("2024-01-01") = date and time("2024-01-01T00:00:00")', null);
+      expr('date("2024-01-01") != date and time("2024-01-01T00:00:00")', null);
+      expr('date("2024-01-01") < date and time("2024-01-02T00:00:00")', null);
+      expr('date("2024-01-01") <= date and time("2024-01-01T00:00:00")', null);
+      expr('date("2024-01-01") > date and time("2024-01-01T00:00:00")', null);
+      expr('date("2024-01-01") >= date and time("2024-01-01T00:00:00")', null);
+      expr('date and time("2024-01-01T10:00:00") > date("2024-01-01")', null);
+
+      // date <-> time
+      expr('time("10:00:00") = date("2024-01-01")', null);
+      expr('time("10:00:00") > date("2024-01-01")', null);
+
+      // date and time <-> time
+      expr('date and time("2024-01-01T10:00:00") = time("10:00:00")', null);
+      expr('date and time("2024-01-01T10:00:00") < time("11:00:00")', null);
+
+      // between / in over incompatible temporal types
+      expr('date("2024-01-01") between date and time("2024-01-01T00:00:00") and date and time("2024-01-05T00:00:00")', null);
+      expr('date("2024-01-03") in [date and time("2024-01-01T00:00:00")..date and time("2024-01-05T00:00:00")]', null);
+
+      // a comparable member still matches within an <in> list
+      expr('date("2024-01-01") in (date and time("2024-01-01T00:00:00"), date("2024-01-01"))', true);
+
+      // comparisons within the same temporal type keep working
+      expr('date("2024-01-01") < date("2024-01-02")', true);
+      expr('date("2024-01-01") = date("2024-01-01")', true);
+      expr('date and time("2024-01-01T10:00:00") > date and time("2024-01-01T09:00:00")', true);
+      expr('time("10:00:00") < time("11:00:00")', true);
+    });
+
+
     describe('ForExpression > SimplePositiveUnaryTest', function() {
 
       expr(`
@@ -636,13 +756,56 @@ describe('interpreter', function() {
         B
       });
 
-      exprSkip('@"P10Y" instance of years and months duration', true);
+      expr('a instance of B', false, {
+        a: 5,
+        B
+      });
 
-      exprSkip('@"P10D" instance of days and time duration', true);
+      // primitives
+      expr('1 instance of number', true);
+      expr('"foo" instance of number', false);
+      expr('"foo" instance of string', true);
+      expr('true instance of boolean', true);
+      expr('1 instance of boolean', false);
 
-      exprSkip('@"10:30:11@Australia/Melbourne" instance of time', true);
+      // Any / Null (null safety, see #7)
+      expr('1 instance of Any', true);
+      expr('"x" instance of Any', true);
+      expr('null instance of Any', false);
+      expr('null instance of Null', true);
+      expr('null instance of boolean', false);
+      expr('null instance of number', false);
 
-      exprSkip('@"2018-12-08T10:30:11+11:00" instance of date and time', true);
+      // temporal
+      expr('date("2018-12-08") instance of date', true);
+      expr('date("2018-12-08") instance of time', false);
+      expr('@"P10Y" instance of years and months duration', true);
+      expr('@"P10D" instance of days and time duration', true);
+      expr('@"P10Y" instance of days and time duration', false);
+      expr('@"P10D" instance of years and months duration', false);
+      expr('@"10:30:11@Australia/Melbourne" instance of time', true);
+      expr('@"2018-12-08T10:30:11+11:00" instance of date and time', true);
+
+      // range
+      expr('[1..10] instance of range', true);
+      expr('5 instance of range', false);
+
+      // list
+      expr('[1, 2] instance of list', true);
+      expr('[1, 2] instance of list<number>', true);
+      expr('[1, "a"] instance of list<number>', false);
+      expr('[] instance of list<number>', true);
+      expr('[[1], [2, 3]] instance of list<list<number>>', true);
+
+      // context
+      expr('{a: 1} instance of context', true);
+      expr('{a: 1} instance of context<a: number>', true);
+      expr('{a: "x"} instance of context<a: number>', false);
+      expr('{a: 1} instance of context<a: number, b: string>', false);
+
+      // function
+      expr('(function(x) x) instance of function<number>->number', true);
+      expr('5 instance of function<number>->number', false);
 
     });
 
@@ -1289,7 +1452,7 @@ describe('interpreter', function() {
     });
 
 
-    describe.skip('DateAndTime', function() {
+    describe('DateAndTime', function() {
 
       expr('time("10:30:00+05:00").time offset = @"PT5H"', true);
 
@@ -1370,8 +1533,7 @@ describe('interpreter', function() {
 
     expr('time("00:01") = time("00:01:00")', true);
 
-    // TODO(nikku): investigate me
-    exprSkip('time("10:30:00+01:00") = time("10:30:00@Europe/Paris")', true);
+    expr('time("10:30:00+01:00") = time("10:30:00@Europe/Paris")', true);
 
     expr('@"2002-04-02T12:00:00-01:00" = @"2002-04-02T17:00:00+04:00"', true);
 
@@ -1704,13 +1866,41 @@ describe('interpreter', function() {
         expect(warnings).to.eql([
           {
             type: 'INVALID_TYPE',
-            message: "Can't exponentiate '10' to '2025-12-12T00:00:00.000Z'",
+            message: "Can't exponentiate '10' to '2025-12-12'",
             position: { from: 14, to: 16 },
             details: {
               template: "Can't exponentiate {right} to {left}",
               values: {
                 right: 10,
                 left: date('2025-12-12')
+              }
+            }
+          }
+        ]);
+      });
+
+
+      it('INVALID_TYPE for mixed-kind duration arithmetic', function() {
+
+        // when
+        const {
+          value,
+          warnings
+        } = evaluate('duration("P1Y") + duration("P1D")');
+
+        // then
+        expect(value).to.be.null;
+
+        expect(warnings).to.eql([
+          {
+            type: 'INVALID_TYPE',
+            message: "Can't add 'P1D' to 'P1Y'",
+            position: { from: 16, to: 17 },
+            details: {
+              template: "Can't add {right} to {left}",
+              values: {
+                left: duration('P1Y'),
+                right: duration('P1D')
               }
             }
           }
@@ -1845,6 +2035,210 @@ describe('interpreter', function() {
         expect(warnings[0].details.values).to.have.keys('target', 'params');
       });
 
+
+      it('INVALID_ARGUMENTS on date(year, month, day, from)', function() {
+
+        // when
+        const {
+          value,
+          warnings
+        } = evaluate('date(2016, 1, 15, 100)');
+
+        // then
+        expect(value).to.be.null;
+
+        expect(warnings).to.eql([
+          {
+            type: 'INVALID_ARGUMENTS',
+            message: 'date(year, month, day) does not accept a <from> argument',
+            position: { from: 0, to: 22 },
+            details: {
+              template: 'date(year, month, day) does not accept a <from> argument',
+              values: {}
+            }
+          }
+        ]);
+      });
+
+
+      it('INVALID_ARGUMENTS on non-number month or day', function() {
+
+        // when
+        const {
+          value,
+          warnings
+        } = evaluate('date(2017, null, 1)');
+
+        // then
+        expect(value).to.be.null;
+
+        expect(warnings).to.eql([
+          {
+            type: 'INVALID_ARGUMENTS',
+            message: 'date(year, month, day) expects <month> and <day> to be numbers',
+            position: { from: 0, to: 19 },
+            details: {
+              template: 'date(year, month, day) expects <month> and <day> to be numbers',
+              values: {}
+            }
+          }
+        ]);
+      });
+
+
+      it('INVALID_ARGUMENTS on out-of-range date components', function() {
+
+        // when
+        const {
+          value,
+          warnings
+        } = evaluate('date(2017, 13, 31)');
+
+        // then
+        expect(value).to.be.null;
+
+        expect(warnings).to.eql([
+          {
+            type: 'INVALID_ARGUMENTS',
+            message: "'2017', '13', '31' is not a valid date",
+            position: { from: 0, to: 18 },
+            details: {
+              template: '{year}, {month}, {day} is not a valid date',
+              values: {
+                year: 2017,
+                month: 13,
+                day: 31
+              }
+            }
+          }
+        ]);
+      });
+
+
+      it('INVALID_ARGUMENTS on non-number time minute or second', function() {
+
+        // when
+        const {
+          value,
+          warnings
+        } = evaluate('time(12, null, 0)');
+
+        // then
+        expect(value).to.be.null;
+
+        expect(warnings).to.eql([
+          {
+            type: 'INVALID_ARGUMENTS',
+            message: 'time(hour, minute, second) expects <minute> and <second> to be numbers',
+            position: { from: 0, to: 17 },
+            details: {
+              template: 'time(hour, minute, second) expects <minute> and <second> to be numbers',
+              values: {}
+            }
+          }
+        ]);
+      });
+
+
+      it('INVALID_ARGUMENTS on non-duration time offset', function() {
+
+        // when
+        const {
+          value,
+          warnings
+        } = evaluate('time(12, 0, 0, 5)');
+
+        // then
+        expect(value).to.be.null;
+
+        expect(warnings).to.eql([
+          {
+            type: 'INVALID_ARGUMENTS',
+            message: 'time(hour, minute, second, offset) expects <offset> to be a duration',
+            position: { from: 0, to: 17 },
+            details: {
+              template: 'time(hour, minute, second, offset) expects <offset> to be a duration',
+              values: {}
+            }
+          }
+        ]);
+      });
+
+
+      it('INVALID_ARGUMENTS on out-of-range time components', function() {
+
+        // when
+        const {
+          value,
+          warnings
+        } = evaluate('time(25, 0, 0)');
+
+        // then
+        expect(value).to.be.null;
+
+        expect(warnings).to.eql([
+          {
+            type: 'INVALID_ARGUMENTS',
+            message: "'25', '0', '0' is not a valid time",
+            position: { from: 0, to: 14 },
+            details: {
+              template: '{hour}, {minute}, {second} is not a valid time',
+              values: {
+                hour: 25,
+                minute: 0,
+                second: 0
+              }
+            }
+          }
+        ]);
+      });
+
+
+      [
+        [ 'sqrt(-3)', "sqrt(number) expects a non-negative number, got '-3'", { number: -3 } ],
+        [ 'log(0)', "log(number) expects a positive number, got '0'", { number: 0 } ],
+        [ 'modulo(10, 0)', "modulo(dividend, divisor) does not accept '0' as a divisor", { divisor: 0 } ],
+        [ 'replace("a", "[", "x")', 'replace(input, pattern, replacement) expects a valid pattern, got \'"["\'', { pattern: '[' } ],
+        [ 'matches("a", "[")', 'matches(input, pattern) expects a valid pattern, got \'"["\'', { pattern: '[' } ],
+        [ 'split("a", "[")', 'split(string, delimiter) expects a valid pattern, got \'"["\'', { delimiter: '[' } ],
+        [ 'number("abc")', 'number(from) expects a numeric string, got \'"abc"\'', { from: 'abc' } ],
+        [ 'string join([1, 2])', "string join(list) expects a list of strings, got '1'", { item: 1 } ],
+        [ 'list replace([1, 2], "x", 9)', 'list replace expects a numeric position or a match function, got \'"x"\'', { matcher: 'x' } ],
+        [ 'abs("x")', 'abs(n) expects a number or duration, got \'"x"\'', { n: 'x' } ],
+        [ 'context([ { key: null, value: 1 } ])', 'context(entries) does not accept a null key', {} ],
+        [ 'context([ { key: "a", value: 1 }, { key: "a", value: 2 } ])', 'context(entries) expects unique keys, got \'"a"\'', { key: 'a' } ],
+        [ 'context put({}, 1, 1)', "context put expects a string key, got '1'", { key: 1 } ],
+        [ 'date("nope")', "date('\"nope\"') is not a valid date", { from: 'nope' } ],
+        [ 'date(null)', "date('null') is not a valid date", { from: null } ],
+        [ 'time("nope")', "time('\"nope\"') is not a valid time", { from: 'nope' } ],
+        [ 'time(null)', "time('null') is not a valid time", { from: null } ],
+        [ 'date and time("2017-13-10T11:22:33")', "date and time('\"2017-13-10T11:22:33\"') is not a valid date time", { from: '2017-13-10T11:22:33' } ],
+        [ 'date and time(null)', "date and time('null') is not a valid date time", { from: null } ]
+      ].forEach(([ expression, message, values ]) => {
+
+        it(`INVALID_ARGUMENTS for <${ expression }>`, function() {
+
+          // when
+          const {
+            value,
+            warnings
+          } = evaluate(expression);
+
+          // then
+          expect(value).to.be.null;
+
+          expect(warnings).to.have.length(1);
+
+          expect(warnings[0]).to.include({
+            type: 'INVALID_ARGUMENTS',
+            message
+          });
+
+          expect(warnings[0].details.values).to.eql(values);
+        });
+
+      });
+
     });
 
 
@@ -1893,6 +2287,72 @@ describe('interpreter', function() {
         // then
         expect(value).to.equal(3);
         expect(warnings).to.be.empty;
+      });
+
+
+      it('for valid date(year, month, day)', function() {
+
+        // when
+        const {
+          value,
+          warnings
+        } = evaluate('date(2017, 12, 31)');
+
+        // then
+        expect(value).to.exist;
+        expect(warnings).to.be.empty;
+      });
+
+
+      it('for valid time(hour, minute, second)', function() {
+
+        // when
+        const {
+          value,
+          warnings
+        } = evaluate('time(12, 0, 0)');
+
+        // then
+        expect(value).to.exist;
+        expect(warnings).to.be.empty;
+      });
+
+
+      it('for abs(null) null propagation', function() {
+
+        // when
+        const {
+          value,
+          warnings
+        } = evaluate('abs(null)');
+
+        // then
+        expect(value).to.be.null;
+        expect(warnings).to.be.empty;
+      });
+
+
+      [
+        'sqrt(9)',
+        'log(10)',
+        'modulo(10, 3)',
+        'replace("abc", "b", "x")',
+        'number("1000")',
+        'string join(["a", "b"], "-")',
+        'context put({}, "a", 1)'
+      ].forEach((expression) => {
+
+        it(`for valid <${ expression }>`, function() {
+
+          // when
+          const {
+            warnings
+          } = evaluate(expression);
+
+          // then
+          expect(warnings).to.be.empty;
+        });
+
       });
 
     });

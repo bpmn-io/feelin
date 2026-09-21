@@ -1,11 +1,33 @@
 import {
-  DateTime,
-  Duration,
-  FixedOffsetZone,
-  SystemZone
-} from 'luxon';
+  isDate,
+  isTime,
+  isDateTime,
+  isDuration,
+  isTemporal,
+  isZoned,
+  toComparable,
+  durationEquals,
+  dateOf,
+  timeOf,
+  combine,
+  timeFrom
+} from './temporal.js';
+
+import { FeelRange, isRange } from './range.js';
+
+import { isFunction } from './function.js';
 
 import { has } from './utils.js';
+
+export {
+  isDate,
+  isTime,
+  isDateTime,
+  isDuration,
+  isTemporal,
+  isZoned,
+  FeelRange
+};
 
 export function isNil(e) {
   return e === null || e === undefined;
@@ -13,14 +35,6 @@ export function isNil(e) {
 
 export function isContext(e) {
   return !isNil(e) && Object.getPrototypeOf(e) === Object.prototype;
-}
-
-export function isDateTime(obj): obj is DateTime {
-  return DateTime.isDateTime(obj);
-}
-
-export function isDuration(obj): obj is Duration {
-  return Duration.isDuration(obj);
 }
 
 export function isArray(e) {
@@ -61,33 +75,23 @@ export function getType(e) {
     return 'duration';
   }
 
+  if (isDate(e)) {
+    return 'date';
+  }
+
+  if (isTime(e)) {
+    return 'time';
+  }
+
   if (isDateTime(e)) {
-    if (
-      e.year === 1900 &&
-      e.month === 1 &&
-      e.day === 1
-    ) {
-      return 'time';
-    }
-
-    if (
-      e.hour === 0 &&
-      e.minute === 0 &&
-      e.second === 0 &&
-      e.millisecond === 0 &&
-      e.zone === FixedOffsetZone.utcInstance
-    ) {
-      return 'date';
-    }
-
     return 'date time';
   }
 
-  if (e instanceof Range) {
+  if (isRange(e)) {
     return 'range';
   }
 
-  if (e instanceof FunctionWrapper) {
+  if (isFunction(e)) {
     return 'function';
   }
 
@@ -101,18 +105,27 @@ export function isType(el: string, type: string): boolean {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function typeCast(obj: any, type: string) {
 
+  if (isDate(obj)) {
+
+    if (type === 'date time') {
+      return combine(obj, timeFrom(0, 0, 0));
+    }
+
+    return null;
+  }
+
+  if (isTime(obj)) {
+    return null;
+  }
+
   if (isDateTime(obj)) {
 
     if (type === 'time') {
-      return obj.set({
-        year: 1900,
-        month: 1,
-        day: 1
-      });
+      return timeOf(obj);
     }
 
     if (type === 'date') {
-      return obj.setZone('utc', { keepLocalTime: true }).startOf('day');
+      return dateOf(obj);
     }
 
     if (type === 'date time') {
@@ -121,37 +134,6 @@ export function typeCast(obj: any, type: string) {
   }
 
   return null;
-}
-
-export type RangeProps = {
-  'start included': boolean;
-  'end included': boolean;
-  start: string|number|null;
-  end: string|number|null;
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  map: <T> (fn: (val: any) => T) => T[];
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  includes: (val: any) => boolean;
-};
-
-export class Range {
-
-  'start included': boolean;
-  'end included': boolean;
-  start: string|number|null;
-  end: string|number|null;
-
-
-  map: <T> (fn: (val) => T) => T[];
-
-
-  includes: (val) => boolean;
-
-  constructor(props: RangeProps) {
-    Object.assign(this, props);
-  }
 }
 
 export function isNumber(obj) : obj is number {
@@ -189,19 +171,20 @@ export function equals(a, b, strict = false) {
       return null;
     }
 
-    if (aType === 'time' && bType !== 'time') {
-      return null;
+    // `date`, `time` and `date and time` are distinct FEEL types; a value
+    // of one type is never comparable to a value of another. Strict
+    // equality (`is`) yields `false` for such a mismatch, a regular
+    // comparison yields `null`.
+    if (aType !== bType) {
+      return strict ? false : null;
     }
 
-    if (bType === 'time' && aType !== 'time') {
-      return null;
+    // a zoned and a zone-less temporal of the same type are never equal
+    if (isZoned(a) !== isZoned(b)) {
+      return false;
     }
 
-    if (strict || a.zone === SystemZone.instance || b.zone === SystemZone.instance) {
-      return a.equals(b);
-    } else {
-      return a.toUTC().valueOf() === b.toUTC().valueOf();
-    }
+    return toComparable(a) === toComparable(b);
   }
 
   if (aType !== bType) {
@@ -223,17 +206,7 @@ export function equals(a, b, strict = false) {
   }
 
   if (aType === 'duration') {
-
-    // years and months duration -> months
-    if (Math.abs(a.as('days')) > 180) {
-      return Math.trunc(a.minus(b).as('months')) === 0;
-    }
-
-    // days and time duration -> seconds
-    else {
-      return Math.trunc(a.minus(b).as('seconds')) === 0;
-    }
-
+    return durationEquals(a, b);
   }
 
   if (aType === 'context') {
@@ -251,12 +224,12 @@ export function equals(a, b, strict = false) {
   }
 
   if (aType === 'range') {
-    return [
-      [ a.start, b.start ],
-      [ a.end, b.end ],
-      [ a['start included'], b['start included'] ],
-      [ a['end included'], b['end included'] ]
-    ].every(([ a, b ]) => a === b);
+    return (
+      a['start included'] === b['start included'] &&
+      a['end included'] === b['end included'] &&
+      equals(a.start, b.start) === true &&
+      equals(a.end, b.end) === true
+    );
   }
 
   if (a == b) {
@@ -266,71 +239,3 @@ export function equals(a, b, strict = false) {
   return aType === bType ? false : null;
 }
 
-export const FUNCTION_PARAMETER_MISSMATCH = {};
-
-
-export class FunctionWrapper {
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  fn: (...args) => any;
-  parameterNames: string[];
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  constructor(fn: (...args) => any, parameterNames: string[]) {
-
-    this.fn = fn;
-    this.parameterNames = parameterNames;
-  }
-
-  invoke(contextOrArgs) {
-
-    let params;
-
-    if (isArray(contextOrArgs)) {
-      params = contextOrArgs;
-
-      // reject
-      if (params.length > this.parameterNames.length) {
-
-        const lastParam = this.parameterNames[this.parameterNames.length - 1];
-
-        // strictly check for parameter count provided
-        // for non var-args functions
-        if (!lastParam || !lastParam.startsWith('...')) {
-          return FUNCTION_PARAMETER_MISSMATCH;
-        }
-      }
-    } else {
-
-      // strictly check for required parameter names,
-      // and fail on wrong parameter name
-      if (Object.keys(contextOrArgs).some(
-        key => !this.parameterNames.includes(key) && !this.parameterNames.includes(`...${key}`)
-      )) {
-        return FUNCTION_PARAMETER_MISSMATCH;
-      }
-
-      params = this.parameterNames.reduce((params, name) => {
-
-        if (name.startsWith('...')) {
-          name = name.slice(3);
-
-          const value = contextOrArgs[name];
-
-          if (!value) {
-            return params;
-          } else {
-
-            // ensure that single arg provided for var args named
-            // parameter is wrapped in a list
-            return [ ...params, ...(isArray(value) ? value : [ value ]) ];
-          }
-        }
-
-        return [ ...params, contextOrArgs[name] ];
-      }, []);
-    }
-
-    return this.fn.call(null, ...params);
-  }
-}

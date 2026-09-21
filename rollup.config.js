@@ -9,7 +9,7 @@ const input = pkg.source;
 
 const external = [
   '@bpmn-io/lezer-feel',
-  'luxon',
+  'temporal-polyfill',
   'min-dash'
 ];
 
