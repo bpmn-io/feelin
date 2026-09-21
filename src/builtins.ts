@@ -41,6 +41,7 @@ import {
   timeFrom,
   dateOf,
   timeOf,
+  timeOfDate,
   combine,
   yearsAndMonthsDuration,
   absDuration
@@ -296,6 +297,11 @@ const builtins = {
       t = timeOf(from);
     }
 
+    // a date converts to its midnight (UTC) time
+    if (isDate(from)) {
+      t = timeOfDate(from);
+    }
+
     if (isNumber(hour)) {
 
       const error =
@@ -325,7 +331,14 @@ const builtins = {
   }, [ 'any?', 'number?', 'number?', 'any?', 'any?' ], [ 'hour', 'minute', 'second', 'offset', 'from' ]),
 
   'duration': fn(function(from) {
-    return duration(from);
+
+    const d = duration(from);
+
+    if (!d) {
+      return invalidArguments('duration({from}) is not a valid duration', { from });
+    }
+
+    return d;
   }, [ 'string' ], [ 'from' ]),
 
   'years and months duration': fn(function(from, to) {

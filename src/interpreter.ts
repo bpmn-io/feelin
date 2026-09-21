@@ -615,7 +615,6 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
     return null;
   }, 'any');
 
-
   case 'QualifiedName': return {
     kind: 'name',
     name: normalizeTypeName(node.input),
@@ -1212,7 +1211,13 @@ function compareIn(value, tests) {
   let unknown = false;
 
   for (const test of tests) {
-    const result = compareValue(test, value);
+    let result = compareValue(test, value);
+
+    // scalar equality is two-valued in a membership test: an
+    // incomparable (null) comparison of plain values means not equal
+    if (result === null && !isRange(test) && typeof test !== 'function') {
+      result = false;
+    }
 
     if (result === true) {
       return true;
