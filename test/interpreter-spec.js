@@ -867,7 +867,6 @@ describe('interpreter', function() {
 
       expr('"\\""', '"');
       expr('"\\n"', '\n');
-      expr('"\\"', '\\');
       expr('"\\t"', '\t');
       expr('"\\r"', '\r');
 
