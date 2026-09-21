@@ -75,9 +75,29 @@ function describeBuiltins(name, evaluate) {
         time(from: "12:45:00") = time("12:45:00")
       `, true);
 
-      exprSkip(`
+      expr(`
         time("23:59:00z") =
         time(23, 59, 0, duration("PT0H"))
+      `, true);
+
+      expr(`
+        time(10, 30, 0, duration("PT5H")) =
+        time("10:30:00+05:00")
+      `, true);
+
+      expr(`
+        time(23, 59, 0, duration("-PT1H")) =
+        time("23:59:00-01:00")
+      `, true);
+
+      expr('string(time(10, 30, 0, duration("PT5H")))', '10:30:00+05:00');
+
+      // sub-minute offsets (Temporal only supports minute precision)
+      expr('string(time(10, 30, 15, duration("PT5H30M15S")))', '10:30:15+05:30:15');
+      expr('time(10, 30, 15, duration("PT5H30M15S")).time offset = duration("PT5H30M15S")', true);
+      expr(`
+        time("00:00:00+05:00:01") =
+        time("00:00:01+05:00:02")
       `, true);
 
       expr(`
@@ -102,23 +122,24 @@ function describeBuiltins(name, evaluate) {
       expr('string(date("2012-12-25"))', '2012-12-25');
       expr('string(date("2018-12-10"))', '2018-12-10');
       expr('string(date and time("2018-12-10"))', '2018-12-10T00:00:00');
-      exprSkip('string(date and time("2018-12-10T10:30:00.0001"))', '2018-12-10T10:30:00.0001');
-      exprSkip('string(date and time("2018-12-10T10:30:00.0001+05:00:01"))', '2018-12-10T10:30:00.0001+05:00:01');
+      expr('string(date and time("2018-12-10T10:30:00.0001"))', '2018-12-10T10:30:00.0001');
+      expr('string(date and time("2018-12-10T10:30:00.0001+05:00:01"))', '2018-12-10T10:30:00.0001+05:00:01');
       expr('string(date and time("2018-12-10T10:30:00@Etc/UTC"))', '2018-12-10T10:30:00@Etc/UTC');
       expr('string(date and time("2018-12-10T10:30:00Z"))', '2018-12-10T10:30:00Z');
       expr('string(date and time(date and time("2017-09-05T10:20:00@Europe/Paris"),time("09:15:30.987@Europe/Paris")))', '2017-09-05T09:15:30.987@Europe/Paris');
-      exprSkip('string(time("10:30:00.0001"))', '10:30:00.0001');
-      exprSkip('string(time("10:30:00.0001+05:00:01"))', '10:30:00.0001+05:00:01');
+      expr('string(time("10:30:00.0001"))', '10:30:00.0001');
+      expr('string(time("10:30:00.0001+05:00:01"))', '10:30:00.0001+05:00:01');
       expr('string(time("10:30:00"))', '10:30:00');
       expr('string(time("10:30:00@Etc/UTC"))', '10:30:00@Etc/UTC');
       expr('string(duration("P1D"))', 'P1D');
-      exprSkip('string(duration("-P1D"))', '-P1D');
+      expr('string(duration("-P1D"))', '-P1D');
       expr('string(duration("P0D"))', 'PT0S');
       expr('string(duration("P1DT2H3M4.123S"))', 'P1DT2H3M4.123S');
       expr('string(duration("PT49H"))', 'P2DT1H');
       expr('string(duration("P1Y"))', 'P1Y');
-      exprSkip('string(duration("-P1Y"))', '-P1Y');
-      exprSkip('string(duration("P0Y"))', 'P0M');
+      expr('string(duration("-P1Y"))', '-P1Y');
+      expr('string(duration("P0Y"))', 'P0M');
+      expr('string(duration("P0M"))', 'P0M');
       expr('string(duration("P1Y2M"))', 'P1Y2M');
       expr('string(duration("P25M"))', 'P2Y1M');
 
@@ -298,6 +319,7 @@ function describeBuiltins(name, evaluate) {
 
       expr('split("foo bar", "[a-z")', null);
 
+      expr('string join()', null);
       expr('string join(123, "X")', null);
 
       expr('string join(123, "X")', null);
@@ -491,9 +513,8 @@ function describeBuiltins(name, evaluate) {
       expr('abs(-1)', 1);
       expr('abs(n: -1)', 1);
 
-      // TODO(nikku): support this
-      exprSkip('abs(@"PT5H") = @"PT5H"', true);
-      exprSkip('abs(@"-PT5H") = @"PT5H"', true);
+      expr('abs(@"PT5H") = @"PT5H"', true);
+      expr('abs(@"-PT5H") = @"PT5H"', true);
 
       expr('modulo( 12, 5 )', 2);
       expr('modulo(-12,5)', 3);
@@ -570,7 +591,7 @@ function describeBuiltins(name, evaluate) {
 
       expr('@"2014-12-31T23:59:59" = date and time("2014-12-31T23:59:59")', true);
 
-      expr('is(date("2012-12-25"), time("23:00:50"))', null);
+      expr('is(date("2012-12-25"), time("23:00:50"))', false);
       expr('is(date("2012-12-25"), @"2012-12-25")', true);
       expr('is(date("2011-12-25"), @"2012-12-25")', false);
 
@@ -578,8 +599,10 @@ function describeBuiltins(name, evaluate) {
       expr('is(time("23:00:50z"), time("23:00:50+01:30"))', false);
       expr('is(time("23:00:50z"), time("23:00:50+01:00"))', false);
 
-      exprSkip('is(@"2012-12-25", @"2012-12-25T00:00:00Z")', null);
-      exprSkip('is(@"2012-12-25", @"2012-12-25T00:00:00")', true);
+      // `is` requires the same type, so a date and a date time are never
+      // the same value (per DMN TCK 0103-feel-is-function, decision date_005)
+      expr('is(@"2012-12-25", @"2012-12-25T00:00:00Z")', false);
+      expr('is(@"2012-12-25", @"2012-12-25T00:00:00")', false);
 
       expr(`
         years and months duration(
@@ -609,16 +632,18 @@ function describeBuiltins(name, evaluate) {
         date("2016-01-15") = date(2016, 1, 15)
       `, true);
 
+      // `date`, `time` and `date and time` are distinct FEEL types, so a
+      // `date` is not comparable to a `date and time` (see #49)
       expr(`
         date(2016, 1, 15) = date and time("2016-01-15T00:00:00z")
-      `, true);
+      `, null);
 
       expr('date(1)', null);
-      exprSkip('date(2017,8,-2)', null);
-      exprSkip('date(2017,-8,2)', null);
-      exprSkip('date(2017,12,32)', null);
-      exprSkip('date(2017,13,31)', null);
-      exprSkip('date(2016, 1, 15, 100)', null);
+      expr('date(2017,8,-2)', null);
+      expr('date(2017,-8,2)', null);
+      expr('date(2017,12,32)', null);
+      expr('date(2017,13,31)', null);
+      expr('date(2016, 1, 15, 100)', null);
 
       expr('date("")', null);
       expr('date(2017,null,1)', null);
@@ -629,9 +654,11 @@ function describeBuiltins(name, evaluate) {
       expr('time(12,null,null,null)', null);
       expr('time(12,11,null,null)', null);
 
+      // `today()` is a `date` and `date and time(...)` a `date and time`;
+      // the two types are not comparable (see #49)
       expr(`
         today() = date and time(now(), @"00:00:00")
-      `, true);
+      `, null);
 
       expr('day of year(@"2016-01-15")', 15);
       expr('day of year(@"2016-11-15")', 320);
@@ -661,23 +688,41 @@ function describeBuiltins(name, evaluate) {
       expr('duration("P7D") + date and time("2020-04-06T08:00:00") = date and time("2020-04-13T08:00:00")', true);
       expr('duration("P2D") + duration("P5D") = duration("P7D")', true);
 
+      // weeks are not part of the FEEL duration grammar, even though
+      // ISO-8601 allows them (see #105)
+      expr('duration("P1W")', null);
+      expr('duration("P2W")', null);
+      expr('duration("-P1W")', null);
+      expr('@"P1W"', null);
+
 
       describe('properties', function() {
 
-        exprSkip('duration("P1D").months', null);
-        exprSkip('duration("P1D").years', null);
-        exprSkip('duration("P1Y").minutes', null);
-        exprSkip('duration("P1Y").hours', null);
+        expr('duration("P1D").months', null);
+        expr('duration("P1D").years', null);
+        expr('duration("P1Y").minutes', null);
+        expr('duration("P1Y").hours', null);
 
-        exprSkip('time("10:30:00+05:00").time offset', 'duration("PT5H")');
-        exprSkip('date and time("2018-12-10T10:30:00+05:00").time offset', 'duration("PT5H")');
+        expr('duration("P1Y2M").years', 1);
+        expr('duration("P1Y2M").months', 2);
+        expr('duration("P1DT2H3M4S").days', 1);
+        expr('duration("P1DT2H3M4S").hours', 2);
+        expr('duration("P1DT2H3M4S").minutes', 3);
+        expr('duration("P1DT2H3M4S").seconds', 4);
+
+        expr('time("10:30:00+05:00").time offset = duration("PT5H")', true);
+        expr('date and time("2018-12-10T10:30:00+05:00").time offset = duration("PT5H")', true);
 
       });
 
 
       describe('ranges', function() {
 
-        exprSkip('duration("P5D") in (duration("P4D"), >=duration("P6D"))', true);
+        // `in (a, b)` is a disjunction of unary tests: P5D is neither equal
+        // to P4D nor >= P6D, so the membership test is false
+        expr('duration("P5D") in (duration("P4D"), >=duration("P6D"))', false);
+        expr('duration("P7D") in (duration("P4D"), >=duration("P6D"))', true);
+        expr('duration("P4D") in (duration("P4D"), >=duration("P6D"))', true);
 
         expr(`
           date and time("2018-12-08T10:30:01") in [
@@ -788,6 +833,19 @@ function describeBuiltins(name, evaluate) {
       expr('includes( [1..10], 11 )', false);
       expr('includes( [1..a], 11 )', true, { a: 11 });
       expr('includes( [1..a], 11 )', false, { a: 10 });
+
+      // temporal ranges (compared via a category-aware comparator)
+      expr('before( [date("2020-01-01")..date("2020-06-01")], [date("2020-07-01")..date("2020-12-01")] )', true);
+      expr('before( [date("2020-01-01")..date("2020-08-01")], [date("2020-07-01")..date("2020-12-01")] )', false);
+      expr('after( [date("2020-07-01")..date("2020-12-01")], [date("2020-01-01")..date("2020-06-01")] )', true);
+      expr('meets( [date("2020-01-01")..date("2020-06-01")], [date("2020-06-01")..date("2020-12-01")] )', true);
+      expr('meets( [date("2020-01-01")..date("2020-06-01")), [date("2020-06-01")..date("2020-12-01")] )', false);
+      expr('includes( [date("2020-01-01")..date("2020-12-01")], date("2020-06-15") )', true);
+      expr('includes( [date("2020-01-01")..date("2020-12-01")], date("2021-06-15") )', false);
+      expr('includes( [date("2020-01-01")..date("2020-12-01")], [date("2020-03-01")..date("2020-09-01")] )', true);
+      expr('before( [duration("P1D")..duration("P5D")], [duration("P7D")..duration("P9D")] )', true);
+      expr('includes( [duration("P1D")..duration("P10D")], duration("P5D") )', true);
+      expr('includes( [duration("P1D")..duration("P10D")], duration("P20D") )', false);
     });
 
 
