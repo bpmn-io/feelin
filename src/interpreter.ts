@@ -179,7 +179,12 @@ class Interpreter {
           args: [],
           node: {
             name,
-            input: input.slice(from, to),
+
+            // materialize the node text only when actually inspected
+            // (operator dispatch, literals, error messages)
+            get input() {
+              return input.slice(from, to);
+            },
             position: {
               from,
               to
@@ -249,6 +254,14 @@ class Interpreter {
 }
 
 const interpreter = new Interpreter();
+
+const TEMPORAL_TYPES = new Set([ 'date', 'time', 'date time', 'duration' ]);
+
+const NUMBER_ONLY = [ 'number' ];
+
+const FILTER_INDEX_TYPES = new Set([ 'number', 'boolean', 'any' ]);
+
+const LIST_OR_RANGE = new Set([ 'list', 'range' ]);
 
 export function unaryTest(
     expression: string,
@@ -354,7 +367,7 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
       });
     };
 
-    const nullable = (op, opName, types = [ 'number' ]) => (a, b) => {
+    const nullable = (op, opName, types = NUMBER_ONLY) => (a, b) => {
 
       const left = a(context);
       const right = b(context);
@@ -368,10 +381,8 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
       const leftType = getType(left);
       const rightType = getType(right);
 
-      const temporal = [ 'date', 'time', 'date time', 'duration' ];
-
-      if (temporal.includes(leftType)) {
-        if (!temporal.includes(rightType)) {
+      if (TEMPORAL_TYPES.has(leftType)) {
+        if (!TEMPORAL_TYPES.has(rightType)) {
           invalidType(opName, left, right);
 
           return null;
@@ -464,60 +475,61 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
     const left = args[0](context);
     const right = args[2](context);
 
-    const matrix = [
-      [ true, true, true ],
-      [ true, false, true ],
-      [ true, null, true ],
-      [ false, true, true ],
-      [ false, false, false ],
-      [ false, null, null ],
-      [ null, true, true ],
-      [ null, false, null ],
-      [ null, null, null ],
-    ];
-
     const a = typeof left === 'boolean' ? left : null;
     const b = typeof right === 'boolean' ? right : null;
 
-    return matrix.find(el => el[0] === a && el[1] === b)[2];
+    // FEEL three-valued or
+    if (a === true || b === true) {
+      return true;
+    }
+
+    if (a === false && b === false) {
+      return false;
+    }
+
+    return null;
   }, 'test');
 
   case 'Conjunction': return tag((context) => {
     const left = args[0](context);
     const right = args[2](context);
 
-    const matrix = [
-      [ true, true, true ],
-      [ true, false, false ],
-      [ true, null, null ],
-      [ false, true, false ],
-      [ false, false, false ],
-      [ false, null, false ],
-      [ null, true, null ],
-      [ null, false, false ],
-      [ null, null, null ],
-    ];
-
     const a = typeof left === 'boolean' ? left : null;
     const b = typeof right === 'boolean' ? right : null;
 
-    return matrix.find(el => el[0] === a && el[1] === b)[2];
+    // FEEL three-valued and
+    if (a === false || b === false) {
+      return false;
+    }
+
+    if (a === true && b === true) {
+      return true;
+    }
+
+    return null;
   }, 'test');
 
-  case 'Context': return (context) => {
+  case 'Context': {
 
-    return args.slice(1, -1).reduce((obj, arg) => {
-      const [ key, value ] = arg({
-        ...context,
-        ...obj
-      });
+    const entries = args.slice(1, -1);
 
-      return {
-        ...obj,
-        [key]: value
-      };
-    }, {});
-  };
+    return (context) => {
+
+      // entries may reference earlier keys, so evaluate each against
+      // the outer context plus the keys collected so far
+      const merged = { ...context };
+      const result = {};
+
+      for (const arg of entries) {
+        const [ key, value ] = arg(merged);
+
+        merged[key] = value;
+        result[key] = value;
+      }
+
+      return result;
+    };
+  }
 
   case 'FunctionBody': return args[0];
 
@@ -570,7 +582,13 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
 
   case 'Identifier': return node.input;
 
-  case 'SpecialFunctionName': return (context) => getBuiltin(node.input, context);
+  case 'SpecialFunctionName': {
+
+    // builtins are fixed; resolve once at build time
+    const fn = getBuiltin(node.input, null);
+
+    return () => fn;
+  }
 
   // preserve spaces in name, but compact multiple
   // spaces into one (token)
@@ -604,28 +622,32 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
     return null;
   }, 'any');
 
-  case 'VariableName': return tag((context) => {
+  case 'VariableName': {
+
     const name = args.join(' ');
 
-    const contextValue = getFromContext(name, context);
+    // builtins are fixed; resolve the fallback once at build time
+    const builtin = getBuiltin(name, null);
 
-    if (typeof contextValue !== 'undefined') {
-      return contextValue;
-    }
+    return tag((context) => {
+      const contextValue = getFromContext(name, context);
 
-    const builtin = getBuiltin(name, context);
+      if (typeof contextValue !== 'undefined') {
+        return contextValue;
+      }
 
-    if (builtin) {
-      return builtin;
-    }
+      if (builtin) {
+        return builtin;
+      }
 
-    interpreterContext.addWarning(node, 'NO_VARIABLE_FOUND', {
-      template: `Variable '${name}' not found`,
-      values: {}
-    });
+      interpreterContext.addWarning(node, 'NO_VARIABLE_FOUND', {
+        template: `Variable '${name}' not found`,
+        values: {}
+      });
 
-    return null;
-  }, 'any');
+      return null;
+    }, 'any');
+  }
 
   case 'QualifiedName': return {
     kind: 'name',
@@ -683,7 +705,9 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
         bContextProducer: ContextsProducer
     ) => {
 
-      return [].concat(...aContexts.map(aContext => {
+      const result = [];
+
+      for (const aContext of aContexts) {
 
         const bContexts = bContextProducer({ ...context, ...aContext });
 
@@ -691,10 +715,12 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
           return null;
         }
 
-        return bContexts.map(bContext => {
-          return { ...aContext, ...bContext };
-        });
-      }));
+        for (const bContext of bContexts) {
+          result.push({ ...aContext, ...bContext });
+        }
+      }
+
+      return result;
     };
 
     const cartesian = (
@@ -795,13 +821,38 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
     };
   }, 'test');
 
-  case 'NumericLiteral': return tag((_context) => node.input.includes('.') ? parseFloat(node.input) : parseInt(node.input), 'number');
+  case 'NumericLiteral': {
 
-  case 'BooleanLiteral': return tag((_context) => node.input === 'true' ? true : false, 'boolean');
+    // parse once at build time, not per evaluation
+    const value = node.input.includes('.') ? parseFloat(node.input) : parseInt(node.input);
 
-  case 'StringLiteral': return tag((_context) => parseString(node.input), 'string');
+    return constant(value, 'number');
+  }
 
-  case 'PositionalParameters': return (context) => args.map(arg => arg(context));
+  case 'BooleanLiteral': {
+
+    const value = node.input === 'true';
+
+    return constant(value, 'boolean');
+  }
+
+  case 'StringLiteral': {
+
+    const value = parseString(node.input);
+
+    return constant(value, 'string');
+  }
+
+  case 'PositionalParameters': {
+
+    // constant parameters: enable constant folding of the enclosing
+    // invocation (e.g. date("2026-12-12"))
+    if (args.every(isConstant)) {
+      return constant(args.map(arg => arg.constantValue), 'parameters');
+    }
+
+    return (context) => args.map(arg => arg(context));
+  }
 
   case 'NamedParameter': return (context) => {
 
@@ -819,57 +870,96 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
     return args;
   }, {});
 
-  case 'DateTimeConstructor': return (context) => {
-    return getBuiltin(node.input, context);
-  };
+  case 'DateTimeConstructor':
 
-  case 'DateTimeLiteral': return tag((context) => {
+    // date / time / date and time / duration are pure builtins, resolved
+    // independent of the evaluation context
+    return constant(getBuiltin(node.input, null), 'function');
 
-    // AtLiteral
-    if (args.length === 1) {
-      return args[0](context);
+  case 'DateTimeLiteral': {
+
+    // fold constant constructor invocations, e.g. date("2026-12-12")
+    if (args.length !== 1 && isConstant(args[0]) && isConstant(args[2])) {
+      const wrappedFn = wrapFunction(args[0].constantValue);
+
+      if (wrappedFn) {
+        const result = wrappedFn.invoke(args[2].constantValue);
+
+        // keep the runtime path (and its warning) on invocation failure
+        if (!isInvocationFailure(result)) {
+          return constant(result, 'date');
+        }
+      }
     }
 
-    // FunctionInvocation
-    else {
-      const target = args[0](context);
-      const wrappedFn = wrapFunction(target);
+    return tag((context) => {
+
+      // AtLiteral
+      if (args.length === 1) {
+        return args[0](context);
+      }
+
+      // FunctionInvocation
+      else {
+        const target = args[0](context);
+        const wrappedFn = wrapFunction(target);
+
+        if (!wrappedFn) {
+          interpreterContext.addWarning(node, 'NO_FUNCTION_FOUND', {
+            template: 'Cannot invoke {target}',
+            values: {
+              target
+            }
+          });
+
+          return null;
+        }
+
+        const contextOrArgs = args[2](context);
+
+        const result = wrappedFn.invoke(contextOrArgs);
+
+        return resolveInvocation(result);
+      }
+
+    }, 'date');
+  }
+
+  case 'AtLiteral': {
+
+    const arg = args[0];
+
+    // fold constant @"..." literals: parse once at build time
+    if (isConstant(arg)) {
+      const wrappedFn = wrapFunction(getBuiltin('@', null));
+
+      if (wrappedFn) {
+        const value = wrappedFn.invoke([ arg.constantValue ]);
+
+        // keep the runtime path (and its warning) on invocation failure
+        if (!isInvocationFailure(value)) {
+          return constant(value, 'date');
+        }
+      }
+    }
+
+    // builtins are fixed; resolve and wrap '@' once at build time
+    const wrappedFn = wrapFunction(getBuiltin('@', null));
+
+    return tag((context) => {
 
       if (!wrappedFn) {
         interpreterContext.addWarning(node, 'NO_FUNCTION_FOUND', {
-          template: 'Cannot invoke {target}',
-          values: {
-            target
-          }
+          template: "Cannot invoke '@'",
+          values: {}
         });
 
         return null;
       }
 
-      const contextOrArgs = args[2](context);
-
-      const result = wrappedFn.invoke(contextOrArgs);
-
-      return resolveInvocation(result);
-    }
-
-  }, 'date');
-
-  case 'AtLiteral': return tag((context) => {
-
-    const wrappedFn = wrapFunction(getBuiltin('@', context));
-
-    if (!wrappedFn) {
-      interpreterContext.addWarning(node, 'NO_FUNCTION_FOUND', {
-        template: "Cannot invoke '@'",
-        values: {}
-      });
-
-      return null;
-    }
-
-    return wrappedFn.invoke([ args[0](context) ]);
-  }, 'date');
+      return resolveInvocation(wrappedFn.invoke([ arg(context) ]));
+    }, 'date');
+  }
 
   case 'FunctionInvocation': return tag((context) => {
 
@@ -976,10 +1066,12 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
 
     for (const ctx of iterationContexts) {
 
-      partial.push(extractor({
-        ...ctx,
-        partial
-      }));
+      // iteration contexts are fresh objects (created by InExpressions),
+      // so expose the partial results by mutation instead of copying
+      // the context per iteration
+      ctx.partial = partial;
+
+      partial.push(extractor(ctx));
     }
 
     return partial;
@@ -1056,7 +1148,7 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
     // a[b]
     // a[b()]
     // a[1 + 3]
-    if ([ 'number', 'boolean', 'any' ].includes(type)) {
+    if (FILTER_INDEX_TYPES.has(type)) {
       const idx = filterFn(context);
 
       if (isBoolean(idx)) {
@@ -1136,21 +1228,32 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
     return args[0](context)(args[1](context));
   }, 'test');
 
-  case 'List': return (context) => {
-    return args.slice(1, -1).map(arg => arg(context));
-  };
+  case 'List': {
+
+    const elements = args.slice(1, -1);
+
+    return (context) => {
+      return elements.map(arg => arg(context));
+    };
+  }
 
   // "[" endpoint ".." endpoint "]"
-  case 'Interval': return tag((context) => {
+  case 'Interval': {
 
-    const left = args[1](context);
-    const right = args[3](context);
+    const startBracket = args[0] === '[';
+    const endBracket = args[4] === ']';
 
-    const startIncluded = left !== null && args[0] === '[';
-    const endIncluded = right !== null && args[4] === ']';
+    return tag((context) => {
 
-    return createRange(left, right, startIncluded, endIncluded);
-  }, 'test');
+      const left = args[1](context);
+      const right = args[3](context);
+
+      const startIncluded = left !== null && startBracket;
+      const endIncluded = right !== null && endBracket;
+
+      return createRange(left, right, startIncluded, endIncluded);
+    }, 'test');
+  }
 
   case 'PositiveUnaryTests':
   case 'Expressions': return (context) => {
@@ -1161,30 +1264,33 @@ function evalNode(node: Node, args: any[], interpreterContext: InterpreterContex
     return args[0](context);
   };
 
-  case 'UnaryTests': return (context) => {
+  case 'UnaryTests': {
 
-    return (value = null) => {
+    const negate = args[0] === 'not';
 
-      const negate = args[0] === 'not';
+    const tests = negate ? args.slice(2, -1) : args;
 
-      const tests = negate ? args.slice(2, -1) : args;
+    return (context) => {
 
-      const matches = tests.map(test => test(context)).flat(1).map(test => {
+      return (value = null) => {
 
-        if (isArray(test)) {
-          return test.includes(value);
-        }
+        const matches = tests.map(test => test(context)).flat(1).map(test => {
 
-        if (typeof test === 'boolean') {
-          return test;
-        }
+          if (isArray(test)) {
+            return test.includes(value);
+          }
 
-        return compareValue(test, value);
-      }).some(v => v === true);
+          if (typeof test === 'boolean') {
+            return test;
+          }
 
-      return matches === null ? null : (negate ? !matches : matches);
+          return compareValue(test, value);
+        }).some(v => v === true);
+
+        return matches === null ? null : (negate ? !matches : matches);
+      };
     };
-  };
+  }
 
   default: return node.name;
   }
@@ -1198,7 +1304,7 @@ function extractValue(context, prop, _target) {
 
   const target = _target(context);
 
-  if ([ 'list', 'range' ].includes(getType(target))) {
+  if (LIST_OR_RANGE.has(getType(target))) {
     return target.map(t => (
       { [prop]: t }
     ));
@@ -1272,7 +1378,8 @@ function coalecenseTypes(a, b) {
 
 type ContextFn<T> = (context: InterpreterContext) => T;
 type TaggedFn = {
-  type: string
+  type: string,
+  constantValue?: unknown
 };
 
 function tag<Z, T extends ContextFn<Z>>(fn: T, type: string) : T & TaggedFn {
@@ -1283,6 +1390,25 @@ function tag<Z, T extends ContextFn<Z>>(fn: T, type: string) : T & TaggedFn {
       return `TaggedFunction[${type}] ${Function.prototype.toString.call(fn)}`;
     }
   });
+}
+
+/**
+ * A tagged evaluation function for a value known at build time; the
+ * `constantValue` marker lets enclosing nodes (e.g. AtLiteral) fold
+ * themselves at build time, too.
+ */
+function constant<Z>(value: Z, type: string) : ContextFn<Z> & TaggedFn {
+
+  return Object.assign(tag(() => value, type), {
+    constantValue: value
+  });
+}
+
+/**
+ * Whether an evaluation function carries a build-time constant value.
+ */
+function isConstant(fn: ContextFn<unknown> & TaggedFn) : boolean {
+  return 'constantValue' in fn;
 }
 
 function isTruthy(obj) {

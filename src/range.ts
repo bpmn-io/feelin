@@ -7,7 +7,7 @@ import { getType } from './types.js';
  * `date and time`). They are mutually incomparable: a value of one type is
  * not comparable to a value of another.
  */
-const TEMPORAL_INSTANT_TYPES = [ 'date', 'time', 'date time' ];
+const TEMPORAL_INSTANT_TYPES = new Set([ 'date', 'time', 'date time' ]);
 
 
 /**
@@ -181,8 +181,8 @@ function rangeIncludes(range: FeelRange, value: RangeValue | null) : boolean | n
 
   if (
     range.valueType !== null &&
-    TEMPORAL_INSTANT_TYPES.includes(valueType) &&
-    TEMPORAL_INSTANT_TYPES.includes(range.valueType) &&
+    TEMPORAL_INSTANT_TYPES.has(valueType) &&
+    TEMPORAL_INSTANT_TYPES.has(range.valueType) &&
     valueType !== range.valueType
   ) {
     return null;
@@ -284,9 +284,11 @@ export function includes(range: FeelRange, value: RangeValue) : boolean | null {
 
 // iteration /////////////////////////////////////////////////////////
 
-const chars = Array.from(
+const CHARS = Array.from(
   'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
 );
+
+const CHAR_TO_INDEX = new Map(CHARS.map((c, i) => [ c, i ]));
 
 function rangeMap<T>(range: FeelRange, fn: (val: RangeValue) => T) : T[] {
 
@@ -340,12 +342,12 @@ function numberRangeMap<T>(start, end, startIncluded, endIncluded, fn: (val) => 
 
 function charRangeValues(start, end, startIncluded, endIncluded) : string[] | null {
 
-  if (!chars.includes(start) || !chars.includes(end)) {
+  let startIdx = CHAR_TO_INDEX.get(start);
+  let endIdx = CHAR_TO_INDEX.get(end);
+
+  if (startIdx === undefined || endIdx === undefined) {
     return null;
   }
-
-  let startIdx = chars.indexOf(start);
-  let endIdx = chars.indexOf(end);
 
   const direction = startIdx > endIdx ? -1 : 1;
 
@@ -357,7 +359,7 @@ function charRangeValues(start, end, startIncluded, endIncluded) : string[] | nu
     endIdx -= direction;
   }
 
-  return chars.slice(
+  return CHARS.slice(
     Math.min(startIdx, endIdx),
     Math.max(startIdx, endIdx) + 1
   );
@@ -366,14 +368,7 @@ function charRangeValues(start, end, startIncluded, endIncluded) : string[] | nu
 
 // construction //////////////////////////////////////////////////////
 
-const RANGE_TYPES = [ 'string', 'number', 'duration', 'time', 'date time', 'date' ];
-
-function isTyped(type: string, values: RangeValue[]) : boolean {
-  return (
-    values.some(e => getType(e) === type) &&
-    values.every(e => e === null || getType(e) === type)
-  );
-}
+const RANGE_TYPES = new Set([ 'string', 'number', 'duration', 'time', 'date time', 'date' ]);
 
 /**
  * Create a {@link FeelRange} from its bounds, inferring the element type.
@@ -385,7 +380,18 @@ export function createRange(
     endIncluded = true
 ) : FeelRange {
 
-  const valueType = RANGE_TYPES.find(type => isTyped(type, [ start, end ])) ?? null;
+  // infer the element type: the shared FEEL type of the non-null bounds
+  const startType = start === null ? null : getType(start);
+  const endType = end === null ? null : getType(end);
+
+  const type = startType ?? endType;
+
+  const valueType = (
+    type !== null &&
+    RANGE_TYPES.has(type) &&
+    (startType === null || startType === type) &&
+    (endType === null || endType === type)
+  ) ? type : null;
 
   if (valueType === null && !(start === null && end === null)) {
     throw new Error(`unsupported range: ${start}..${end}`);

@@ -1,5 +1,6 @@
 import {
   isType,
+  isArray,
   equals,
   isString,
   isNumber,
@@ -44,7 +45,9 @@ import {
   timeOfDate,
   combine,
   yearsAndMonthsDuration,
-  absDuration
+  absDuration,
+  isZoned,
+  toComparable
 } from './temporal.js';
 
 
@@ -349,11 +352,11 @@ const builtins = {
 
     let t;
 
-    if (/^-?P/.test(string)) {
+    if (DURATION_START_PATTERN.test(string)) {
       t = duration(string);
     }
 
-    else if (/^[\d]{1,2}:[\d]{1,2}:[\d]{1,2}/.test(string)) {
+    else if (TIME_START_PATTERN.test(string)) {
       t = parseTime(string);
     }
 
@@ -365,7 +368,11 @@ const builtins = {
       t = parseDate(string);
     }
 
-    return t || null;
+    if (!t) {
+      return invalidArguments('@"{string}" is not a valid temporal literal', { string });
+    }
+
+    return t;
   }, [ 'string' ]),
 
   'now': fn(function() {
@@ -588,18 +595,74 @@ const builtins = {
 
   'concatenate': fn(function(...list) {
 
-    return list.reduce((result, arg) => {
-      return result.concat(arg);
-    }, []);
+    const result = [];
+
+    for (const arg of list) {
+      if (isArray(arg)) {
+        for (const item of arg) {
+          result.push(item);
+        }
+      } else {
+        result.push(arg);
+      }
+    }
+
+    return result;
 
   }, [ 'any' ], [ '...list' ]),
 
   'insert before': fn(function(list, position, newItem) {
-    return list.slice(0, position - 1).concat([ newItem ], list.slice(position - 1));
+
+    // single-copy equivalent of
+    // list.slice(0, position - 1).concat([ newItem ], list.slice(position - 1))
+    const len = list.length;
+
+    let p = position - 1;
+
+    if (p < 0) {
+      p = Math.max(0, len + p);
+    } else if (p > len) {
+      p = len;
+    }
+
+    const result = new Array(len + 1);
+
+    for (let i = 0; i < p; i++) {
+      result[i] = list[i];
+    }
+
+    result[p] = newItem;
+
+    for (let i = p; i < len; i++) {
+      result[i + 1] = list[i];
+    }
+
+    return result;
   }, [ 'list', 'number', 'any?' ], [ 'list', 'position', 'newItem' ]),
 
   'remove': fn(function(list, position) {
-    return list.slice(0, position - 1).concat(list.slice(position));
+
+    // single-copy equivalent of
+    // list.slice(0, position - 1).concat(list.slice(position))
+    const len = list.length;
+
+    const head = Math.min(Math.max(position - 1, -len), len);
+    const tail = Math.min(Math.max(position, -len), len);
+
+    const a = head < 0 ? len + head : head;
+    const b = tail < 0 ? len + tail : tail;
+
+    const result = new Array(a + (len - b));
+
+    for (let i = 0; i < a; i++) {
+      result[i] = list[i];
+    }
+
+    for (let i = b; i < len; i++) {
+      result[a + (i - b)] = list[i];
+    }
+
+    return result;
   }, [ 'list', 'number' ], [ 'list', 'position' ]),
 
   'reverse': fn(function(list) {
@@ -620,27 +683,12 @@ const builtins = {
 
   'union': listFn(function(...lists) {
 
-    return lists.reduce((result, list) => {
-
-      return list.reduce((result, e) => {
-        if (!result.some(r => equals(e, r))) {
-          result.push(e);
-        }
-
-        return result;
-      }, result);
-    }, []);
+    return distinctLists(lists);
 
   }, 'list', [ '...list' ]),
 
   'distinct values': fn(function(list) {
-    return list.reduce((result, e) => {
-      if (!result.some(r => equals(e, r))) {
-        result.push(e);
-      }
-
-      return result;
-    }, []);
+    return distinctLists([ list ]);
   }, [ 'list' ], [ 'list' ]),
 
   'flatten': fn(function(list) {
@@ -899,7 +947,15 @@ const builtins = {
   // 10.3.4.9 Sort
 
   'sort': fn(function(list, precedes) {
-    return Array.from(list).sort((a, b) => precedes.invoke([ a, b ]) ? -1 : 1);
+
+    // fast path: positional two-parameter functions can be invoked
+    // directly, skipping FeelFunction#invoke argument binding overhead
+    // on every comparison
+    const compare = precedes.parameterNames.length === 2
+      ? (a, b) => precedes.fn(a, b) ? -1 : 1
+      : (a, b) => precedes.invoke([ a, b ]) ? -1 : 1;
+
+    return Array.from(list).sort(compare);
   }, [ 'list', 'function' ], [ 'list', 'precedes' ]),
 
 
@@ -1013,6 +1069,16 @@ function matches(a, b) {
 
 const FALSE = {};
 
+const DURATION_START_PATTERN = /^-?P/;
+
+const TIME_START_PATTERN = /^\d{1,2}:\d{1,2}:\d{1,2}/;
+
+const NON_WORD_PATTERN = /\W/;
+
+const SUPPORTED_FLAGS_PATTERN = /[smix]/g;
+
+const EXTENDED_FLAG_PATTERN = /x/;
+
 function createArgTester(arg) {
   const optional = arg.endsWith('?');
 
@@ -1062,28 +1128,26 @@ function createArgsValidator(argDefinitions) {
 
   return function(args) {
 
-    while (args.length < argDefinitions.length) {
-      args.push(undefined);
-    }
+    const result = [];
 
-    return args.reduce((result, arg, index) => {
+    // validate provided args; pad and validate missing trailing args
+    // (without mutating the caller's array)
+    const length = Math.max(args.length, argDefinitions.length);
 
-      if (result === false) {
-        return result;
-      }
+    for (let index = 0; index < length; index++) {
 
       const test = tests[index];
 
-      const conversion = test ? test(arg) : arg;
+      const conversion = test ? test(args[index]) : args[index];
 
       if (conversion === FALSE) {
         return false;
       }
 
       result.push(conversion);
+    }
 
-      return result;
-    }, []);
+    return result;
 
   };
 }
@@ -1169,16 +1233,116 @@ function sum(list) {
   return list.reduce((sum, el) => sum === null ? el : sum + el, null);
 }
 
-function flatten<T>([ x,...xs ]: (T|T[])[]):T[] {
-  return (
-    x !== undefined
-      ? [ ...Array.isArray(x) ? flatten(x) : [ x ],...flatten(xs) ]
-      : []
-  );
+/**
+ * Deduplicate the concatenation of `lists`, preserving FEEL `equals`
+ * semantics and first-occurrence order.
+ *
+ * @param {any[][]} lists
+ *
+ * @return {any[]}
+ */
+function distinctLists(lists) {
+
+  // hash-bucket scalars and temporals for O(1) probes; complex values
+  // (lists, contexts, ranges, durations) fall back to linear equals() scans
+  const result = [];
+  const seenScalars = new Set();
+  const seenTemporals = new Set();
+  const complex = [];
+
+  const temporalKey = (e) => {
+    const type = getType(e);
+
+    if (type === 'date' || type === 'time' || type === 'date time') {
+      return `${type}|${isZoned(e) ? 1 : 0}|${toComparable(e)}`;
+    }
+
+    return null;
+  };
+
+  for (const list of lists) {
+    for (const e of list) {
+
+      // NaN excluded: it is never equal to itself per equals() and
+      // thus never deduplicated
+      const scalar = (
+        typeof e === 'number' && !Number.isNaN(e) ||
+        typeof e === 'string' ||
+        typeof e === 'boolean' ||
+        e === null ||
+        e === undefined
+      );
+
+      // complex values are probed against scalars, too: equals() unwraps
+      // single-element lists, so [ 1 ] equals 1
+      if (scalar) {
+        if (seenScalars.has(e) || complex.some(c => equals(e, c))) {
+          continue;
+        }
+
+        seenScalars.add(e);
+        result.push(e);
+
+        continue;
+      }
+
+      const key = temporalKey(e);
+
+      if (key !== null) {
+        if (seenTemporals.has(key) || complex.some(c => equals(e, c))) {
+          continue;
+        }
+
+        seenTemporals.add(key);
+        result.push(e);
+
+        continue;
+      }
+
+      if (result.some(r => equals(e, r))) {
+        continue;
+      }
+
+      complex.push(e);
+      result.push(e);
+    }
+  }
+
+  return result;
+}
+
+function flatten<T>(list: (T | T[])[]): T[] {
+
+  const result: T[] = [];
+
+  // explicit stack of [array, index] frames, deepest list on top
+  const stack: [ (T | T[])[], number ][] = [ [ list, 0 ] ];
+
+  while (stack.length) {
+    const frame = stack[stack.length - 1];
+    const [ items, index ] = frame;
+
+    if (index >= items.length) {
+      stack.pop();
+      continue;
+    }
+
+    frame[1]++;
+
+    const item = items[index];
+
+    if (Array.isArray(item)) {
+      stack.push([ item, 0 ]);
+    } else if (item !== undefined) {
+      result.push(item);
+    }
+  }
+
+  return result;
 }
 
 function toKeyString(key) {
-  if (typeof key === 'string' && /\W/.test(key)) {
+  if (typeof key === 'string' && NON_WORD_PATTERN.test(key)) {
     return toString(key, true);
   }
 
@@ -1350,14 +1514,14 @@ const MONTH_NAMES = [
  */
 export function buildFlags(flags: string, defaultFlags: string) {
 
-  const unsupportedFlags = flags.replace(/[smix]/g, '');
+  const unsupportedFlags = flags.replace(SUPPORTED_FLAGS_PATTERN, '');
 
   if (unsupportedFlags) {
     throw new Error('illegal flags: ' + unsupportedFlags);
   }
 
   // we don't implement the <x> flag
-  if (/x/.test(flags)) {
+  if (EXTENDED_FLAG_PATTERN.test(flags)) {
     throw notImplemented('matches <x> flag');
   }
 
